@@ -1,0 +1,290 @@
+//--------------------------------------------------------
+// Shoreside Config file
+// M. Benjamin, MIT	
+
+ServerHost = localhost
+ServerPort = 9000
+Community  = shoreside
+
+#include plugs.moos <origin_warp>
+  
+//--------------------------------------------------------
+Processconfig = ANTLER
+{
+  MSBetweenLaunches = 100
+
+  Run = MOOSDB          @ NewConsole = false
+  Run = pRealm          @ NewConsole = false
+  Run = uTimerScript    @ NewConsole = false
+  Run = uTimerScript    @ NewConsole = false ~ uTimerScript_Heartbeat
+	Run = pMarineViewer   @ NewConsole = false
+  Run = pLogger         @ NewConsole = false
+  Run = uProcessWatch   @ NewConsole = false
+  Run = pShare          @ NewConsole = false
+  Run = pHostInfo       @ NewConsole = false
+  Run = uFldShoreBroker @ NewConsole = false
+  Run = uFldNodeComms   @ NewConsole = false
+}
+
+#include plugs.moos <pHostInfo>
+//--------------------------------------------------
+// pShare Config Block (shoreside)
+// Inbound: everything vehicles and the mothership send us.
+// Outbound: the fleet picture and the operator's mission region,
+//           pushed up to the mothership coordinator.
+// (uFldShoreBroker adds the shore->vehicle routes dynamically.)
+
+ProcessConfig = pShare
+{
+  AppTick    = 2
+  CommsTick  = 2
+
+  input = route = localhost:$(PSHARE_PORT)
+
+  // Uplink to the mothership coordinator.
+  // NOTE: never add an output route for a variable that also arrives
+  //       on the input route (e.g. NODE_REPORT) — pShare then refuses
+  //       to inject the incoming copy into the local DB. Vehicles send
+  //       their NODE_REPORTs to the mothership directly instead.
+  output = src_name=MISSION_POLY,      route=localhost:$(MSHIP_PSHARE=9205)
+  output = src_name=REGION_VERTEX,     route=localhost:$(MSHIP_PSHARE=9205)
+  output = src_name=REGION_CLEAR,      route=localhost:$(MSHIP_PSHARE=9205)
+  output = src_name=DEPLOY_ALL,        route=localhost:$(MSHIP_PSHARE=9205)
+  output = src_name=TARGET_ALERT_ALL,  route=localhost:$(MSHIP_PSHARE=9205)
+}
+
+#include plugs.moos <uProcessWatch>
+
+//--------------------------------------------------
+// uFldShoreBroker Config Block
+
+ProcessConfig = uFldShoreBroker
+{ 
+  AppTick       = 1
+  CommsTick     = 1
+
+  // Note: [QBRIDGE = FOO]  is shorthand for                    
+  //       [BRIDGE = src=FOO_$V,  alias=FOO] and                
+  //       [BRIDGE = src=FOO_ALL, alias=FOO]
+
+	auto_bridge_appcast = true
+	
+  qbridge  = DEPLOY, RETURN, STATION_KEEP, NODE_REPORT, NODE_MESSAGE
+  qbridge  = MOOS_MANUAL_OVERRIDE, AVOID, UP_LOITER
+  qbridge  = RETURN_UPDATES, BCM_DISPLAY_RADII
+  qbridge  = CONTACT_INFO, NODE_GROUP_UPDATE
+  qbridge  = BHV_ABLE_FILTER
+  // Mission mode triggers (from operator or mothership coordinator)
+  qbridge  = SURVEY, TARGET_ALERT, LOITER, SHORE_HEARTBEAT
+  qbridge  = WPT_UPDATE, TRAIL_UPDATE, SUSPECT_TARGET
+
+  bridge   = src=UP_LOITER_$N, alias=UP_LOITER
+  bridge   = src=DRIFT_VECTOR_ADD, alias=DRIFT_VECTOR_ADD
+  bridge   = src=HELM_MAP_CLEAR, alias=HELM_MAP_CLEAR
+  bridge   = src=MISSION_HASH, alias=MISSION_HASH
+}
+
+//--------------------------------------------------
+// uFldNodeComms Config Block
+
+ProcessConfig = uFldNodeComms
+{
+  AppTick   = 2
+  CommsTick = 2
+
+  comms_range      = 500
+  critical_range   = 25
+  min_msg_interval = 15
+  max_msg_length   = 1000
+  groups           = true
+
+	app_logging = true
+	
+  view_node_rpt_pulses = false
+}
+
+//--------------------------------------------------
+// pLogger Config Block
+
+ProcessConfig = pLogger
+{
+  AppTick       = 10
+  CommsTick     = 10
+  
+  File          = XLOG_SHORESIDE
+  PATH          = ./
+  SyncLog       = true @ 0.2
+  AsyncLog      = true
+  FileTimeStamp = true
+
+  LogAuxSrc     = true
+
+  // Log it all!!!!!
+  WildCardLogging = true 
+
+  WildCardOmitPattern = *_STATUS
+  WildCardOmitPattern = DB_VARSUMMARY
+  WildCardOmitPattern = DB_RWSUMMARY
+  WildCardOmitPattern = *_ITER_GAP
+  WildCardOmitPattern = *_ITER_LEN
+}
+
+//--------------------------------------------------
+// uLoadWatch Config Block
+
+ProcessConfig = uLoadWatch
+{
+  AppTick   = 1
+  CommsTick = 1
+
+  thresh = app=pHelmIvP,  gapthresh=3
+  thresh = app=pHostInfo, gapthresh=5
+  thresh = app=any,       gapthresh=2.0
+  thresh = app=uMemWatch, gapthresh=50
+
+  breach_trigger = 5
+}
+
+//--------------------------------------------------------
+ProcessConfig = pMarineViewer
+{
+  AppTick    = 4
+  CommsTick  = 4
+
+  watch_cluster = key=basic, vars=MISSION_HASH
+
+  tiff_file            = forrest19.tif
+  set_pan_x            = -90
+  set_pan_y            = -280
+  zoom                 = 0.65
+  vehicles_shape_scale = 1.5
+  vehicles_name_mode   = names
+
+	app_logging = true
+	
+	watch_cluster = key=mission_top, vars=DEPLOY:RETURN
+	watch_cluster = key=mission_top, vars=STATION_KEEP:LOITER:AVOID
+	
+  circle_viewable_all = false
+
+	content_mode      = appcast       // or realmcast
+	realmcast_channel = mission_top
+	
+  appcast_color_scheme = indigo
+	appcast_font_size    = large
+  procs_font_size      = large
+  nodes_font_size      = large
+
+  stale_report_thresh = 10
+  stale_remove_thresh = 18
+
+	scope = REALMCAST_REQ
+	scope = REALMCAST_REQ_GILDA
+	scope = REALMCAST_REQ_HENRY
+	
+  left_context[disable] = BHV_ABLE_FILTER_$[UP_VNAME_CLOSEST] = contact=abe, action=disable
+  left_context[return_point] = RETURN_$[UP_VNAME_CLOSEST] = true
+  left_context[return_point] = RETURN_UPDATES_$[UP_VNAME_CLOSEST] = points=$[XPOS],$[YPOS]
+  left_context[station]      = STATION_KEEP_$[UP_VNAME_CLOSEST] = true
+
+  // Draw the search region: pick "region" in the mouse-context menu,
+  // then left-click each corner. pRegionDivider takes the convex hull
+  // of the clicks, so click order does not matter; three clicks are
+  // enough and every further click refines the shape.
+  left_context[region] = REGION_VERTEX = x=$[XPOS],y=$[YPOS]
+
+  cmd = label=DEPLOY, var=DEPLOY,              sval=true,  receivers=all:$(VNAMES)
+  cmd = label=DEPLOY, var=MOOS_MANUAL_OVERRIDE, sval=false, receivers=all:$(VNAMES)
+  cmd = label=DEPLOY, var=AVOID,               sval=true,  receivers=all:$(VNAMES)
+  cmd = label=DEPLOY, var=RETURN,              sval=false, receivers=all:$(VNAMES)
+  cmd = label=DEPLOY, var=STATION_KEEP,        sval=false, receivers=all:$(VNAMES)
+
+  cmd = label=RETURN, var=RETURN,        sval=true,  receivers=all:$(VNAMES)
+  cmd = label=RETURN, var=STATION_KEEP,  sval=false, receivers=all:$(VNAMES)
+
+  // Survey mode: vehicles begin coordinated area search
+  cmd = label=SURVEY, var=SURVEY,        sval=true,  receivers=all:$(VNAMES)
+  cmd = label=SURVEY, var=LOITER,        sval=false, receivers=all:$(VNAMES)
+  cmd = label=SURVEY, var=TARGET_ALERT,  sval=false, receivers=all:$(VNAMES)
+
+  // Intercept mode: vehicles trail the suspect target
+  cmd = label=INTERCEPT, var=TARGET_ALERT, sval=true,  receivers=all:$(VNAMES)
+  cmd = label=INTERCEPT, var=SURVEY,       sval=false, receivers=all:$(VNAMES)
+
+  cmd = label=LOITER-FAST, var=UP_LOITER, sval=speed=2.8, receivers=all:$(VNAMES)
+  cmd = label=LOITER-SLOW, var=UP_LOITER, sval=speed=1.4, receivers=all:$(VNAMES)
+
+  cmd = label=LOITER-CLOCKWISE-TRUE,  var=UP_LOITER, sval=clockwise=true,  receivers=all:$(VNAMES)
+  cmd = label=LOITER-CLOCKWISE-FALSE, var=UP_LOITER, sval=clockwise=false, receivers=all:$(VNAMES)
+	
+  button_one   = DEPLOY # DEPLOY_ALL=true
+  button_one   = MOOS_MANUAL_OVERRIDE_ALL=false
+  button_one   = AVOID_ALL=true
+  button_one   = RETURN_ALL=false # STATION_KEEP_ALL=false
+
+  button_two   = RETURN # RETURN_ALL=true
+  button_two   = STATION_KEEP_ALL=false
+
+  button_three = SURVEY # SURVEY_ALL=true
+  button_three = LOITER_ALL=false
+  button_three = TARGET_ALERT_ALL=false
+
+  button_four  = INTERCEPT # TARGET_ALERT_ALL=true
+  button_four  = SURVEY_ALL=false
+
+  button_five  = STATION:true  # STATION_KEEP_ALL=true
+  button_six   = STATION:false # STATION_KEEP_ALL=false
+
+	button_seven = REFINE:N # CONTACT_INFO_ALL = name=avdcol # use_refinery=false
+	button_eight = REFINE:Y # CONTACT_INFO_ALL = name=avdcol # use_refinery=true
+
+  // Hand the operator's mission region up to the mothership region divider
+  // Region controls. Draw by picking "region" in the mouse-context
+  // menu and left-clicking corners; these two are the reset and the
+  // fall-back default.
+  button_nine  = REGION:CLEAR # REGION_CLEAR = true
+  button_ten   = REGION:DEFAULT # MISSION_POLY = pts={-70,-10:210,-10:210,-130:-70,-130}
+}
+
+//--------------------------------------------------------
+// uTimerScript Config Block
+// Mission timeline automation:
+//   t=0s   : Mission launched (vehicles loitering at start positions)
+//   t=10s  : Auto-transition all vehicles to SURVEY mode
+//   t=600s : (Optional) nudge loiter positions if survey not yet triggered
+//
+// Operator can override at any time via SURVEY / INTERCEPT buttons.
+
+ProcessConfig = uTimerScript
+{
+  AppTick   = 4
+  CommsTick = 4
+
+  // Script only advances when the operator has deployed.
+  // NOTE: shoreside posts DEPLOY_ALL, not DEPLOY.
+  condition  = DEPLOY_ALL == true
+  reset_max  = unlimited
+  reset_time = none
+
+  // t=10s: Auto-transition vehicles from LOITERING to SURVEYING
+  event = var=SURVEY_ALL,       val=true,  time=10
+  event = var=LOITER_ALL,       val=false, time=10
+  event = var=TARGET_ALERT_ALL, val=false, time=10
+}
+
+//--------------------------------------------------------
+// uTimerScript_Heartbeat Config Block
+ProcessConfig = uTimerScript_Heartbeat
+{
+  AppTick   = 4
+  CommsTick = 4
+  
+  condition  = DEPLOY_ALL == true
+  reset_max  = unlimited
+  reset_time = 2
+
+  // Send heartbeat every 2 seconds
+  event = var=SHORE_HEARTBEAT_ALL, val=true, time=2
+}
+
+

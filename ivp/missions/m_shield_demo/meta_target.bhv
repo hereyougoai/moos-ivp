@@ -1,0 +1,93 @@
+//-------------------------------------------------
+// Target Vessel Helm config file
+// m_shield_demo — the intruder the USVs search for and trail.
+//
+// It runs a fixed patrol loop through the survey area, but also
+// avoids collisions. That avoidance is what makes the herding work:
+// as abe/ben close in on their trail stations the target is pushed
+// off its patrol line, and with both USVs flanking it, the only open
+// water is away from them -- so it gets driven out of the area.
+
+initialize  DEPLOY = false
+initialize  RETURN = false
+initialize  AVOID  = true
+
+set MODE = ACTIVE {
+  DEPLOY = true
+} INACTIVE
+
+set MODE = RETURNING {
+  MODE = ACTIVE
+  RETURN = true
+}
+
+set MODE = PATROLLING {
+  MODE = ACTIVE
+  RETURN = false
+}
+
+//----------------------------------------------
+// BHV_Waypoint — Patrol loop across the survey area
+Behavior = BHV_Waypoint
+{
+  name      = target_patrol
+  pwt       = 100
+  condition = MODE == PATROLLING
+  updates   = TGT_WPT_UPDATE
+  perpetual = true
+
+  speed          = $(TGT_SPD)
+  capture_radius = 8.0
+  slip_radius    = 20.0
+  repeat         = 999
+
+  points = $(TGT_PATROL)
+}
+
+//----------------------------------------------
+// BHV_AvoidCollision — This is the "driven away" mechanism.
+//
+// pwt is above the patrol behavior's, so when a USV gets inside
+// pwt_outer_dist the target abandons its patrol heading and turns
+// away. The USVs sit at trail_range=30 on both quarters, which is
+// inside this 55 m outer distance, so the pressure is continuous
+// rather than a single dodge.
+Behavior = BHV_AvoidCollision
+{
+  name       = target_avd_
+  pwt        = 250
+  condition  = AVOID = true
+  condition  = MODE == ACTIVE
+  updates    = TGT_CONTACT_INFO
+  templating = spawn
+
+  contact           = to-be-set
+  on_no_contact_ok  = true
+  extrapolate       = true
+  decay             = 30,60
+
+  pwt_outer_dist    = 55
+  pwt_inner_dist    = 25
+  completed_dist    = 70
+  min_util_cpa_dist = 12
+  max_util_cpa_dist = 25
+  pwt_grade         = linear
+  bearing_line_config = white:0, green:0.65, yellow:0.8, red:1.0
+}
+
+//----------------------------------------------
+// BHV_Waypoint — Leave the area when told to
+Behavior = BHV_Waypoint
+{
+  name      = target_return
+  pwt       = 100
+  condition = MODE == RETURNING
+  updates   = RETURN_UPDATES
+  endflag   = DEPLOY = false
+
+  speed     = $(TGT_SPD)
+  radius    = 5.0
+  nm_radius = 15.0
+  point     = $(TGT_HOME)
+  lead      = 8
+}

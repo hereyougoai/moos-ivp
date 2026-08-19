@@ -1,0 +1,73 @@
+m_shield_demo — Shield AI Demo 類中線任務 (MOOS-IvP)
+
+任務摘要:
+  - 兩艘子船 (abe, ben) 於任務區域內協同搜索
+  - 一艘模擬目標船 (target) 在任務區內巡邏，供子船偵測與跟隨
+  - 母船 (mothership) 作為艦隊協調中心 (分區 + 燕型夾角指派)
+  - Shoreside 提供操作員 GUI 與通訊轉發
+
+MOOS 社群架構:
+  社群           MOOSDB Port   pShare Port
+  ----------     -----------   -----------
+  shoreside      9000          9200        (operator GUI + vehicle broker)
+  abe (USV1)     9001          9201        (sub-vessel 1)
+  ben (USV2)     9002          9202        (sub-vessel 2)
+  target         9003          9203        (simulated intruder)
+  mothership     9005          9205        (coordinator)
+
+通訊流向:
+  操作員指令   shoreside --(uFldShoreBroker/pShare)--> abe, ben, target
+  船位回報     abe/ben/target --(uFldNodeBroker)--> shoreside
+               abe/ben/target --(pShare 直送)------> mothership
+  任務區域     shoreside (MISSION_POLY, DEPLOY_ALL) --> mothership
+  艦隊任務     mothership (WPT_UPDATE_*, TRAIL_UPDATE_*) --直送--> abe, ben
+
+  注意: 母船的指令「不能」經由 shoreside 中繼。pShare 若對某個變數同時
+        存在 input 與 output 路由，就拒絕把收到的那份注入本地 MOOSDB，
+        而 uFldShoreBroker 的 qbridge 正好會建立這種路由。
+
+啟動方式:
+  ./launch.sh [time_warp]
+  例如: ./launch.sh 10    (10倍加速模擬)
+       ./launch.sh 1     (即時)
+
+劃定搜索區域 (兩種方式):
+  A. 滑鼠標點 (建議): 在 pMarineViewer 的滑鼠 context 選單選 "region"，
+     然後在地圖上左鍵點各個角 (3 點以上)。pRegionDivider 取這些點的
+     凸包當作區域，所以點的順序無所謂，多點會持續修正形狀。
+  B. 按 REGION:DEFAULT 按鈕，套用內建的預設區域。
+  按 REGION:CLEAR 可清掉重畫。
+
+  區域確定後會依子船數量自動由西向東等分 (目前 2 艘 = 2 條)，
+  未來加船只要擴充 vnames 清單即可，不需改程式。
+
+掃描覆蓋顯示:
+  子船掃過的格子會在地圖上以 VIEW_GRID 淺色標示，方便看還有哪裡沒掃。
+  格子大小與感測半徑在 pRegionDivider 的 cell_size / sensor_radius 設定。
+
+啟動後在 pMarineViewer GUI 按下按鈕:
+  1. DEPLOY   — 部署所有船艦 (子船 + 目標船)
+  2. SURVEY   — 切換至搜索模式 (DEPLOY 後 10s 自動觸發)
+  3. INTERCEPT — 切換至攔截模式 (子船以 135/225 度燕型夾角跟隨目標船)
+  4. RETURN   — 所有船回港
+  5. STATION:true / STATION:false — 定點待命
+  9. REGION:CLEAR   — 清掉目前區域，重新標點
+  10. REGION:DEFAULT — 套用內建預設區域
+
+  DEPLOY 後母船會在 5 秒發出分區航線、6 秒發出燕型夾角。
+  (helm 要 DEPLOY 之後才會建立 behavior，太早發的 update 會被丟棄。)
+
+清除 log 檔案:
+  ./clean.sh
+
+驅逐機制:
+  目標船自己也跑 pContactMgrV20 + BHV_AvoidCollision。子船佔住左右
+  兩側後方站位後，目標船的避碰行為 (pwt 250, 高於巡邏的 100) 會把它
+  推離原本的巡邏航線；兩側都被夾住時唯一的空水域就是遠離子船的方向，
+  因而被逐出任務區。
+
+已知限制:
+  - pRegionDivider 只做等寬長條切分，未依船速/電量做不等份分配。
+  - RETURN 時 abe 與 ben 都回到 0,0 同一點。
+
+詳細說明請參考: mission_documentation.md

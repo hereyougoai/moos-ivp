@@ -1,0 +1,168 @@
+//-------------------------------------------------
+// Target Vessel MOOS config file
+// m_shield_demo — simulated intruder ("target")
+//
+// Port layout:
+//   MOOSDB    : $(MOOS_PORT)   [default 9003]
+//   pShare in : $(PSHARE_PORT) [default 9203]
+
+ServerHost = localhost
+ServerPort = $(MOOS_PORT)
+Community  = $(VNAME)
+
+#include plugs.moos <origin_warp>
+
+//----------------------------------------------------
+Processconfig = ANTLER
+{
+  MSBetweenLaunches = 50
+
+  Run = MOOSDB         @ NewConsole = false
+  Run = pRealm         @ NewConsole = false
+  Run = uProcessWatch  @ NewConsole = false
+  Run = pShare         @ NewConsole = false
+  Run = pLogger        @ NewConsole = false
+  Run = pNodeReporter  @ NewConsole = false
+  Run = pMarinePIDV22  @ NewConsole = false
+  Run = pHelmIvP       @ NewConsole = false
+  Run = pHostInfo      @ NewConsole = false
+  Run = uFldNodeBroker @ NewConsole = false
+  Run = uSimMarineV22  @ NewConsole = false
+  Run = pContactMgrV20 @ NewConsole = false
+}
+
+#include plugs.moos <pShare>
+#include plugs.moos <pHostInfo>
+#include plugs.moos <uProcessWatch>
+
+//------------------------------------------------------
+// uSimMarineV22 Config Block
+
+ProcessConfig = uSimMarineV22
+{
+  AppTick   = 10
+  CommsTick = 10
+
+  start_pos = $(START_POS), 0
+  prefix    = NAV
+
+  max_speed     = $(MAX_SPD)
+  turn_rate     = 70
+  turn_spd_loss = 0.6
+}
+
+//----------------------------------------------------
+// pHelmIvP Config Block
+
+ProcessConfig = pHelmIvP
+{
+  AppTick    = 4
+  CommsTick  = 4
+
+  behaviors = targ_$(VNAME).bhv
+  verbose   = false
+  domain    = course:0:359:360
+  domain    = speed:0:$(MAX_SPD):21
+}
+
+//----------------------------------------------------
+// pNodeReporter Config Block
+
+ProcessConfig = pNodeReporter
+{
+  AppTick   = 2
+  CommsTick = 2
+
+  platform_color = $(COLOR)
+  vessel_type    = ship
+
+  coord_policy_global = true
+}
+
+//--------------------------------------------------------
+// pContactMgrV20 Config Block
+// Detects the approaching USVs and spawns a BHV_AvoidCollision
+// against each, which is what lets them herd this vessel.
+
+ProcessConfig = pContactMgrV20
+{
+  AppTick   = 2
+  CommsTick = 2
+
+  decay = 30,60
+
+  alert_verbose = true
+
+  contact_local_coords = force_lat_lon
+  contact_max_age   = 35
+  display_radii     = false
+
+  alert = id=target_avd_, var=TGT_CONTACT_INFO, val="name=$[VNAME] # contact=$[VNAME]"
+  alert = id=target_avd_, alert_range=60, cpa_range=25
+
+  post_closest_range   = true
+  hold_alerts_for_helm = true
+}
+
+//--------------------------------------------------
+// uFldNodeBroker Config Block
+
+ProcessConfig = uFldNodeBroker
+{
+  AppTick   = 1
+  CommsTick = 1
+
+  try_shore_host = pshare_route=$(SHORE_IP):$(SHORE_PSHARE)
+
+  bridge = src=VIEW_POLYGON
+  bridge = src=VIEW_SEGLIST
+  bridge = src=VIEW_POINT
+  bridge = src=NODE_REPORT_LOCAL, alias=NODE_REPORT
+}
+
+//-----------------------------------------------------
+// pMarinePIDV22 Config Block
+
+ProcessConfig = pMarinePIDV22
+{
+  AppTick    = 10
+  CommsTick  = 10
+
+  verbose       = true
+  depth_control = false
+  active_start  = true
+
+  yaw_pid_kp             = 1.2
+  yaw_pid_kd             = 0.1
+  yaw_pid_ki             = 0.3
+  yaw_pid_integral_limit = 0.07
+
+  speed_pid_kp             = 1.0
+  speed_pid_kd             = 0.0
+  speed_pid_ki             = 0.0
+  speed_pid_integral_limit = 0.07
+
+  maxrudder    = 100
+  maxthrust    = 100
+  speed_factor = 20
+}
+
+//--------------------------------------------------
+// pLogger Config Block
+
+ProcessConfig = pLogger
+{
+  AppTick   = 5
+  CommsTick = 5
+
+  File          = LOG_%(VNAME)
+  PATH          = ./
+  AsyncLog      = true
+  FileTimeStamp = true
+
+  WildCardLogging = true
+  WildCardOmitPattern = *_STATUS
+  WildCardOmitPattern = APPCAST
+  WildCardOmitPattern = DB_VARSUMMARY
+  WildCardOmitPattern = *ITER_GAP, *ITER_LEN
+}
