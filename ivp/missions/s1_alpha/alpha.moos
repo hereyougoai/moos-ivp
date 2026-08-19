@@ -196,6 +196,7 @@ ProcessConfig = pMarineViewer
   button_two = RETURN # RETURN=true
   button_three = SLOWER # WPT_UPDATE=speed=1.5
   button_four = FASTER # WPT_UPDATE=speed=3.5
+  button_five = SQUARE # WPT_UPDATE=points=0,-20:100,-20:100,-50:0,-50
 
   action  = MENU_KEY=deploy # DEPLOY = true # RETURN = false
   action+ = MENU_KEY=deploy # MOOS_MANUAL_OVERRIDE=false
