@@ -103,6 +103,7 @@ void showInterfaceAndExit()
   blk("PUBLICATIONS:                                                   ");
   blk("------------------------------------                            ");
   blk("  WPT_UPDATE_<VNAME> = polygon = format=lawnmower, label=...,   ");
+  blk("  REGION_CENTER      = x=..,y=..  (centroid of the region)      ");
   blk("                       x=.., y=.., height=.., width=..,         ");
   blk("                       lane_width=.., rows=.., startx=..,       ");
   blk("                       starty=..                                ");

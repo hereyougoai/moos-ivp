@@ -15,7 +15,6 @@ Processconfig = ANTLER
 
   Run = MOOSDB          @ NewConsole = false
   Run = pRealm          @ NewConsole = false
-  Run = uTimerScript    @ NewConsole = false
   Run = uTimerScript    @ NewConsole = false ~ uTimerScript_Heartbeat
 	Run = pMarineViewer   @ NewConsole = false
   Run = pLogger         @ NewConsole = false
@@ -175,8 +174,19 @@ ProcessConfig = pMarineViewer
   procs_font_size      = large
   nodes_font_size      = large
 
-  stale_report_thresh = 10
-  stale_remove_thresh = 18
+  // NOTE on time-warp: AppTick schedules each process's real
+  // wall-clock iteration rate -- MOOSTimeWarp only speeds up the
+  // *timestamp value* MOOSTime() returns, not that real schedule. So
+  // at high warp, ordinary OS scheduling jitter (a fleet of 5 full
+  // MOOS communities competing for CPU, a logger's disk flush, etc.)
+  // gets amplified by the warp factor in simulated seconds: a stall
+  // of a couple of real seconds at warp=10 looks like a 20+ sim-second
+  // gap between NODE_REPORTs. The old 10/18 thresholds (28 sim-sec
+  // total) were tight enough that this routinely tripped false
+  // "stale" and removed healthy vehicles from the chart at warp>=10.
+  // These are back near the pMarineViewer stock default (30/30).
+  stale_report_thresh = 20
+  stale_remove_thresh = 40
 
 	scope = REALMCAST_REQ
 	scope = REALMCAST_REQ_GILDA
@@ -217,20 +227,35 @@ ProcessConfig = pMarineViewer
   cmd = label=LOITER-CLOCKWISE-TRUE,  var=UP_LOITER, sval=clockwise=true,  receivers=all:$(VNAMES)
   cmd = label=LOITER-CLOCKWISE-FALSE, var=UP_LOITER, sval=clockwise=false, receivers=all:$(VNAMES)
 	
+  // Each button posts the COMPLETE mode state rather than only the bits
+  // that changed. Leaving stale flags behind (SURVEY still true under
+  // RETURN, TARGET_ALERT still true under a second DEPLOY) is what made
+  // the vehicles behave unpredictably when the mission was re-run.
+  //
+  // DEPLOY goes straight to SURVEY. There used to be a 10-second
+  // LOITERING window first, during which each USV drew its loiter
+  // octagon at a hard-coded default position -- the stray polygon that
+  // flashed on the chart for a few seconds after every deploy, sitting
+  // nowhere near the region the operator had just drawn.
   button_one   = DEPLOY # DEPLOY_ALL=true
   button_one   = MOOS_MANUAL_OVERRIDE_ALL=false
   button_one   = AVOID_ALL=true
   button_one   = RETURN_ALL=false # STATION_KEEP_ALL=false
+  button_one   = SURVEY_ALL=true # LOITER_ALL=false
+  button_one   = TARGET_ALERT_ALL=false
 
   button_two   = RETURN # RETURN_ALL=true
   button_two   = STATION_KEEP_ALL=false
+  button_two   = SURVEY_ALL=false # TARGET_ALERT_ALL=false
 
   button_three = SURVEY # SURVEY_ALL=true
   button_three = LOITER_ALL=false
   button_three = TARGET_ALERT_ALL=false
+  button_three = RETURN_ALL=false # STATION_KEEP_ALL=false
 
   button_four  = INTERCEPT # TARGET_ALERT_ALL=true
-  button_four  = SURVEY_ALL=false
+  button_four  = SURVEY_ALL=false # LOITER_ALL=false
+  button_four  = RETURN_ALL=false # STATION_KEEP_ALL=false
 
   button_five  = STATION:true  # STATION_KEEP_ALL=true
   button_six   = STATION:false # STATION_KEEP_ALL=false
@@ -247,39 +272,14 @@ ProcessConfig = pMarineViewer
 }
 
 //--------------------------------------------------------
-// uTimerScript Config Block
-// Mission timeline automation:
-//   t=0s   : Mission launched (vehicles loitering at start positions)
-//   t=10s  : Auto-transition all vehicles to SURVEY mode
-//   t=600s : (Optional) nudge loiter positions if survey not yet triggered
-//
-// Operator can override at any time via SURVEY / INTERCEPT buttons.
-
-ProcessConfig = uTimerScript
-{
-  AppTick   = 4
-  CommsTick = 4
-
-  // Script only advances when the operator has deployed.
-  // NOTE: shoreside posts DEPLOY_ALL, not DEPLOY.
-  condition  = DEPLOY_ALL == true
-  reset_max  = unlimited
-  reset_time = none
-
-  // t=10s: Auto-transition vehicles from LOITERING to SURVEYING
-  event = var=SURVEY_ALL,       val=true,  time=10
-  event = var=LOITER_ALL,       val=false, time=10
-  event = var=TARGET_ALERT_ALL, val=false, time=10
-}
-
-//--------------------------------------------------------
 // uTimerScript_Heartbeat Config Block
+// Free-running: the vehicles' link watchdogs should see a heartbeat from
+// the moment they come up, not only once the operator has deployed.
 ProcessConfig = uTimerScript_Heartbeat
 {
   AppTick   = 4
   CommsTick = 4
   
-  condition  = DEPLOY_ALL == true
   reset_max  = unlimited
   reset_time = 2
 

@@ -75,9 +75,14 @@ void showExampleConfigAndExit()
   blk("                                                                ");
   blk("  vnames      = abe:ben          // colon-sep list              ");
   blk("  target_name = target           // default                    ");
-  blk("  spread_deg  = 90               // default, total fan spread  ");
-  blk("  trail_range = 30               // default, meters            ");
+  blk("  pincer_mode = herd             // default, or \"stern\"        ");
+  blk("  spread_deg  = 120              // default, total arc spread  ");
+  blk("  trail_range = 25               // default, meters            ");
   blk("  trigger_var = TARGET_ALERT_ALL // default                    ");
+  blk("  swap_margin_deg = 30           // default, pairing hysteresis");
+  blk("  center_deadzone = 20           // default, meters            ");
+  blk("  repost_interval = 4            // default, seconds           ");
+  blk("  draw_pincer     = true         // default                    ");
   blk("}                                                               ");
   exit(0);
 }
@@ -97,11 +102,15 @@ void showInterfaceAndExit()
   blk("SUBSCRIPTIONS:                                                  ");
   blk("------------------------------------                            ");
   blk("  NODE_REPORT       = NAME=target,X=..,Y=..,HDG=..,SPD=..       ");
+  blk("  REGION_CENTER     = x=..,y=..   (from pRegionDivider)         ");
   blk("  TARGET_ALERT_ALL  = true                                      ");
   blk("                                                                ");
   blk("PUBLICATIONS:                                                   ");
   blk("------------------------------------                            ");
-  blk("  TRAIL_UPDATE_<VNAME> = trail_angle=.. # trail_range=..        ");
+  blk("  TRAIL_UPDATE_<VNAME> = trail_angle=.. # trail_angle_type=..   ");
+  blk("                         # trail_range=..                       ");
+  blk("  VIEW_SEGLIST         = pincer arms (when draw_pincer)         ");
+  blk("  VIEW_POINT           = <vname>_station markers                ");
   blk("                                                                ");
   exit(0);
 }

@@ -83,6 +83,7 @@ Behavior = BHV_Waypoint
   pwt       = 100
   condition = MODE == RETURNING
   updates   = RETURN_UPDATES
+  perpetual = true
   endflag   = DEPLOY = false
 
   speed     = $(TGT_SPD)

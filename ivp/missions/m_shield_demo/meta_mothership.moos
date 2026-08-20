@@ -65,6 +65,9 @@ ProcessConfig = pShare
   output = src_name=VIEW_POLYGON,    route=localhost:$(SHORE_PSHARE)
   output = src_name=VIEW_GRID,       route=localhost:$(SHORE_PSHARE)
   output = src_name=VIEW_GRID_DELTA, route=localhost:$(SHORE_PSHARE)
+  // The pincer arms and station markers drawn by pTargetCoordinator.
+  output = src_name=VIEW_SEGLIST,    route=localhost:$(SHORE_PSHARE)
+  output = src_name=VIEW_POINT,      route=localhost:$(SHORE_PSHARE)
 }
 
 ProcessConfig = pLogger
@@ -105,10 +108,12 @@ ProcessConfig = pRegionDivider
 
 //--------------------------------------------------
 // pTargetCoordinator Config Block
-// While TARGET_ALERT_ALL is true, spaces the vehicles in $(VNAMES)
-// into pincer trail angles around the target vessel's stern and
-// posts TRAIL_UPDATE_<VNAME>, continuously re-centered on the
-// target's current heading.
+// While TARGET_ALERT_ALL is true, puts the vehicles in $(VNAMES) on a
+// blocking arc between the target and the middle of the search region
+// (REGION_CENTER, published by pRegionDivider) and posts each an
+// absolute-bearing TRAIL_UPDATE_<VNAME>. The pair therefore stands
+// between the intruder and the water it wants, and its own collision
+// avoidance drives it outward -- a pincer, not a tail chase.
 
 ProcessConfig = pTargetCoordinator
 {
@@ -117,8 +122,29 @@ ProcessConfig = pTargetCoordinator
 
   vnames      = $(VNAMES)
   target_name = target
-  spread_deg  = 90
-  trail_range = 30
-  trigger_var = TARGET_ALERT_ALL
+
+  pincer_mode = herd   // or "stern" for the old astern-fan behavior
+
+  // 120 deg apart on the inboard arc: the two USVs sit roughly on the
+  // target's beams rather than in a queue behind it, which is what
+  // makes the envelopment visible and gives its avoidance behavior
+  // pressure from both sides at once.
+  spread_deg  = 120
+
+  // Inside the target's own BHV_AvoidCollision pwt_inner_dist (25m),
+  // so the herding pressure is continuous rather than a single dodge.
+  trail_range = 25
+
+  // Hysteresis on the station pairing. Without it the two USVs traded
+  // stations at 2 Hz once they were near-symmetric about the target,
+  // and both just spun in place.
+  swap_margin_deg = 30
+
+  // Within this of the region center the "outboard" direction is
+  // meaningless, so the arc falls back to the target's stern.
+  center_deadzone = 20
+
+  repost_interval = 4
+  draw_pincer     = true
 }
 

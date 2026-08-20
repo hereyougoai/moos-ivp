@@ -30,8 +30,11 @@ MMOD=""
 VNAME="target"
 COLOR="orange"
 START_POS="x=90,y=-140,heading=0"
-TGT_SPD="1.4"
-MAX_SPD="2"
+# Deliberately slower than the USVs (stock 2.0, max 3.0) so the
+# interceptors can close from any part of the field and then hold
+# their pincer stations through the target's evasive turns.
+TGT_SPD="0.8"
+MAX_SPD="1.2"
 TGT_HOME="90,-200"
 # Patrol loop that crosses both survey lanes
 TGT_PATROL="30,-120:150,-120:150,-40:30,-40"
@@ -57,7 +60,7 @@ for ARGI; do
 	echo "  --vname=<target>       Target vessel name    "
 	echo "  --color=<orange>       Target vessel color   "
 	echo "  --start_pos=<..>       Target start position "
-	echo "  --spd=<1.4>            Target patrol speed   "
+	echo "  --spd=<0.8>            Target patrol speed   "
 	echo "  --mmod=<mod>           Mission variation/mod "
 	exit 0;
     elif [ "${ARGI//[^0-9]/}" = "$ARGI" -a "$TIME_WARP" = 1 ]; then

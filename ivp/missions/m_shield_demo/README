@@ -46,28 +46,44 @@ MOOS 社群架構:
   格子大小與感測半徑在 pRegionDivider 的 cell_size / sensor_radius 設定。
 
 啟動後在 pMarineViewer GUI 按下按鈕:
-  1. DEPLOY   — 部署所有船艦 (子船 + 目標船)
-  2. SURVEY   — 切換至搜索模式 (DEPLOY 後 10s 自動觸發)
-  3. INTERCEPT — 切換至攔截模式 (子船以 135/225 度燕型夾角跟隨目標船)
+  1. DEPLOY   — 部署所有船艦，並「直接」進入搜索模式
+  2. SURVEY   — 手動切回搜索模式
+  3. INTERCEPT — 切換至攔截模式 (子船在目標船的「內側」形成 120 度包夾弧)
   4. RETURN   — 所有船回港
   5. STATION:true / STATION:false — 定點待命
   9. REGION:CLEAR   — 清掉目前區域，重新標點
   10. REGION:DEFAULT — 套用內建預設區域
 
-  DEPLOY 後母船會在 5 秒發出分區航線、6 秒發出燕型夾角。
+  每顆按鈕都會送出「完整」的模式狀態 (而不是只送有變動的那幾個)，
+  所以任務可以任意順序切換、也可以重複跑第二輪而不會殘留舊旗標。
+
+  DEPLOY 之後 pRegionDivider 會立刻發出分區航線，並在接下來幾秒內
+  重送幾次，以確保不會跟 helm 建立 behavior 的時序賽跑。
   (helm 要 DEPLOY 之後才會建立 behavior，太早發的 update 會被丟棄。)
 
 清除 log 檔案:
   ./clean.sh
 
-驅逐機制:
-  目標船自己也跑 pContactMgrV20 + BHV_AvoidCollision。子船佔住左右
-  兩側後方站位後，目標船的避碰行為 (pwt 250, 高於巡邏的 100) 會把它
-  推離原本的巡邏航線；兩側都被夾住時唯一的空水域就是遠離子船的方向，
-  因而被逐出任務區。
+驅逐機制 (包夾式):
+  pTargetCoordinator 不再把子船排在目標船的正後方跟車，而是把它們
+  放在「目標船 → 任務區中心」這條方位線上、左右各 60 度的位置
+  (spread_deg=120, trail_range=25)，用的是絕對方位而非相對方位。
+  也就是說子船永遠站在目標船與它想待的水域之間，形成一道牆。
+
+  目標船自己也跑 pContactMgrV20 + BHV_AvoidCollision。它的避碰行為
+  (pwt 250, 高於巡邏的 100) 在兩側同時被壓迫時，唯一的空水域就是
+  「向外」，因而被穩定地推出任務區，而不是被追著跑。
+
+  地圖上會用紅色線段 (VIEW_SEGLIST "pincer") 畫出兩支包夾臂，以及
+  兩個紅色站位點，讓包夾隊形一目了然。
+
+  速度差: 目標船 0.8 m/s (上限 1.2)，子船 2.0 m/s (上限 3.0)。
+  子船有 2.5 倍的速度餘裕，可以從場地任一角落趕上並保持站位。
 
 已知限制:
   - pRegionDivider 只做等寬長條切分，未依船速/電量做不等份分配。
   - RETURN 時 abe 與 ben 都回到 0,0 同一點。
+  - 子船會一路護送目標船離開，目前沒有「離夠遠就脫離」的判定，
+    所以可能跟出任務區很遠；要收兵請按 RETURN 或 SURVEY。
 
 詳細說明請參考: mission_documentation.md

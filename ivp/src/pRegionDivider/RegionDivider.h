@@ -48,6 +48,9 @@ class RegionDivider : public AppCastingMOOSApp
   void  handleMailNodeReport(std::string);
   void  clearRegion();
   void  divideAndPost();
+  void  postRegionCenter();
+  void  postSurveyPaths();
+  void  eraseSurveyPaths();
 
   void  initCoverageGrid();
   void  postCoverageGrid();
@@ -76,6 +79,11 @@ class RegionDivider : public AppCastingMOOSApp
 
   std::vector<double> m_vertices_x;
   std::vector<double> m_vertices_y;
+
+  double       m_repost_interval;
+  unsigned int m_reposts_per_deploy;
+  unsigned int m_reposts_left;
+  double       m_next_repost_utc;
 
   XYConvexGrid m_grid;
   bool         m_grid_ready;

@@ -182,8 +182,8 @@ ProcessConfig = pMarinePIDV22
   // overshoots each corner -- dropped to zero. The raised derivative
   // term damps the resulting rudder motion.
   yaw_pid_kp             = 1.2
-  yaw_pid_kd             = 0.1
-  yaw_pid_ki             = 0.3
+  yaw_pid_kd             = 0.3
+  yaw_pid_ki             = 0.0
   yaw_pid_integral_limit = 0.07
   
   // Speed PID controller
@@ -240,6 +240,21 @@ ProcessConfig = pLogger
 
 //--------------------------------------------------
 // uTimerScript Config Block - Heartbeat Monitor
+//
+// Watchdog for a lost shoreside link. Two things used to make this
+// misfire and leave a vehicle uncontrollable:
+//
+//   1) The timeout was 10 script-seconds. Script time is warped, so
+//      at WARP=10 a mere 1 second of real-world scheduling jitter
+//      tripped it, even though the shoreside was still there.
+//   2) It posted MOOS_MANUAL_OVERRIDE=true. That parks the helm but
+//      leaves pMarinePIDV22 (active_start=true) driving the last
+//      DESIRED_HEADING/DESIRED_SPEED forever -- the vehicle circles
+//      away at speed and nothing but a fresh DEPLOY recovers it.
+//
+// Now: a 60s timeout (30 heartbeats' worth of margin) and the only
+// action is STATION_KEEP, which brings the vehicle to a controlled
+// hold and is cleared again by DEPLOY or the STATION:false button.
 ProcessConfig = uTimerScript
 {
   AppTick   = 2
@@ -253,7 +268,6 @@ ProcessConfig = uTimerScript
   reset_max  = unlimited
   reset_time = end
 
-  // If 10 seconds pass without a reset (disconnect), halt vehicle
-  event = var=STATION_KEEP, val=true, time=10
-  event = var=MOOS_MANUAL_OVERRIDE, val=true, time=10
+  // If 60s pass without a heartbeat, come to a controlled stop.
+  event = var=STATION_KEEP, val=true, time=60
 }

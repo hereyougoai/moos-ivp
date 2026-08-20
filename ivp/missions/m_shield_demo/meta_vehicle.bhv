@@ -59,7 +59,10 @@ Behavior = BHV_StationKeep
   name      = station_keep
   pwt       = 100
   condition = MODE == STATION-KEEPING
-  station_pt   = 0,0
+  // Hold wherever the vehicle was when the mode engaged. A fixed
+  // station_pt sent both USVs charging across the field to 0,0 the
+  // moment the link watchdog or the STATION button fired.
+  center_activate = true
   inner_radius = 5
   outer_radius = 20
   outer_speed  = 1.2
@@ -100,6 +103,19 @@ Behavior = BHV_Waypoint
   // Fallback pattern so the behavior is never empty in the seconds
   // between helm start-up and the mothership's assignment arriving.
   // Overwritten by the first WPT_UPDATE from pRegionDivider.
+  //
+  // Drawn invisible, permanently, on purpose -- two reasons:
+  //  1) The placeholder itself has nothing to do with the operator's
+  //     drawn region, so flashing it on the chart before the real
+  //     assignment lands looks like a stray, misplaced polygon.
+  //  2) BHV_Waypoint erases its own segment list the instant this
+  //     behavior stops running (e.g. the moment INTERCEPT engages),
+  //     which would make the sweep pattern disappear from the chart
+  //     every time the mode changed. pRegionDivider instead draws the
+  //     lawnmower path itself as a persistent VIEW_SEGLIST (label
+  //     <vname>_survey_path) that survives mode changes, so that copy
+  //     is authoritative and this one stays off.
+  visual_hints = edge_color=invisible, vertex_color=invisible, label_color=invisible
   points = format=lawnmower, label=$(VNAME)_survey, x=70, y=-50, height=80, width=160, lane_width=25, rows=east-west, startx=-70, starty=-10
 }
 
@@ -114,9 +130,14 @@ Behavior = BHV_Trail
   updates    = TRAIL_UPDATE
 
   contact     = target
-  trail_range = 30      // Station distance; coordinator may override
-  trail_angle = 180     // Dead astern (RELATIVE to target heading)
-  trail_angle_type = relative
+  trail_range = 25      // Station distance; coordinator may override
+  // pTargetCoordinator posts ABSOLUTE bearings: it puts the USVs on the
+  // arc between the target and the middle of the mission region, so the
+  // pair forms a wall that herds the target outward rather than two
+  // boats queuing up in its wake. Until the first TRAIL_UPDATE arrives,
+  // 180 absolute (station due south of the target) is a harmless start.
+  trail_angle = 180
+  trail_angle_type = absolute
 
   // Cornering: the trail point swings fast when the target turns, so
   // a tight capture radius makes the helm chase it and saw the rudder.
@@ -125,9 +146,13 @@ Behavior = BHV_Trail
   radius      = 8
   nm_radius   = 25
 
-  // Ramp priority in with distance instead of switching on hard, so
-  // the behavior does not fight the avoidance behavior at the corners.
-  pwt_outer_dist = 60
+  // pwt_outer_dist is NOT a priority ramp -- BHV_Trail's getRelevance()
+  // returns a hard 0 outside it, so the behavior produced no objective
+  // function at all and a USV further than 60m from the target simply
+  // ignored INTERCEPT until something else happened to carry it closer.
+  // Zero means "no cutoff": press INTERCEPT and it sets off immediately,
+  // from anywhere in the field.
+  pwt_outer_dist = 0
 }
 
 //----------------------------------------------
@@ -146,11 +171,15 @@ Behavior = BHV_AvoidCollision
   extrapolate       = true
   decay             = 30,60
 
-  pwt_outer_dist    = 30
-  pwt_inner_dist    = 12
-  completed_dist    = 40
-  min_util_cpa_dist = 6
-  max_util_cpa_dist = 12
+  // Kept tighter than the 25m pincer station: at the old 30m outer
+  // distance the avoidance behavior was permanently active against the
+  // very contact the trail behavior was trying to close on, and the two
+  // fought each other instead of holding station.
+  pwt_outer_dist    = 20
+  pwt_inner_dist    = 10
+  completed_dist    = 30
+  min_util_cpa_dist = 5
+  max_util_cpa_dist = 10
   pwt_grade         = linear
   bearing_line_config = white:0, green:0.65, yellow:0.8, red:1.0
 }
@@ -163,12 +192,16 @@ Behavior = BHV_Waypoint
   pwt         = 100
   updates     = RETURN_UPDATES
   condition   = MODE == RETURNING
+  // Without perpetual the behavior is retired after the first RETURN,
+  // so a second RETURN left the helm in RETURNING mode with nothing
+  // running at all. Keep it alive so the mission can be re-run.
+  perpetual   = true
   endflag     = STATION_KEEP = true
   endflag     = AVOID = false
 
   speed     = 1.3
   radius    = 3.0
   nm_radius = 15.0
-  point     = 0,0
+  points    = 0,0
   lead      = 8
 }

@@ -11,6 +11,7 @@
 #include "XYFormatUtilsPoly.h"
 #include "ConvexHullGenerator.h"
 #include "XYGridUpdate.h"
+#include "XYFormatUtilsSegl.h"
 #include "NodeRecord.h"
 #include "NodeRecordUtils.h"
 
@@ -32,6 +33,15 @@ RegionDivider::RegionDivider()
   m_region_set        = false;
   m_deployed          = false;
   m_divisions_posted  = 0;
+
+  // A vehicle's survey behavior starts with an invisible placeholder
+  // pattern and only turns real (and visible) once our WPT_UPDATE
+  // lands. That post races the DEPLOY that switches the helm into
+  // SURVEYING, so repeat it a few times over the first seconds.
+  m_repost_interval    = 1.5;
+  m_reposts_per_deploy = 3;
+  m_reposts_left       = 0;
+  m_next_repost_utc    = 0;
 
   m_grid_ready        = false;
   m_cells_swept       = 0;
@@ -81,6 +91,8 @@ bool RegionDivider::OnNewMail(MOOSMSG_LIST &NewMail)
 	    initCoverageGrid();
 	}
 	divideAndPost();
+	m_reposts_left    = m_reposts_per_deploy;
+	m_next_repost_utc = MOOSTime() + m_repost_interval;
       }
       m_deployed = newly_deployed;
     }
@@ -109,6 +121,12 @@ bool RegionDivider::Iterate()
 
   if(m_coverage_enabled)
     postCoverageUpdates();
+
+  if((m_reposts_left > 0) && (MOOSTime() >= m_next_repost_utc)) {
+    divideAndPost();
+    m_reposts_left--;
+    m_next_repost_utc = MOOSTime() + m_repost_interval;
+  }
 
   AppCastingMOOSApp::PostReport();
   return(true);
@@ -168,6 +186,10 @@ bool RegionDivider::OnStartUp()
 	handled = setPosDoubleOnString(m_sensor_radius, value);
       else if(param == "grid_label")
 	handled = setNonWhiteVarOnString(m_grid_label, value);
+      else if(param == "repost_interval")
+	handled = setPosDoubleOnString(m_repost_interval, value);
+      else if(param == "reposts_per_deploy")
+	handled = setUIntOnString(m_reposts_per_deploy, value);
 
       if(!handled)
 	reportUnhandledConfigWarning(orig);
@@ -308,7 +330,10 @@ void RegionDivider::clearRegion()
     Notify("VIEW_GRID", dead_grid.get_spec());
   }
 
-  m_region_set  = false;
+  eraseSurveyPaths();
+
+  m_region_set   = false;
+  m_reposts_left = 0;
   m_grid_ready  = false;
   m_cells_swept = 0;
   m_grid_deltas.clear();
@@ -328,6 +353,26 @@ void RegionDivider::postRegionPoly()
   poly.set_vertex_color("dodger_blue");
   poly.set_active(true);
   Notify("VIEW_POLYGON", poly.get_spec());
+
+  postRegionCenter();
+}
+
+//------------------------------------------------------------
+// Procedure: postRegionCenter()
+//   Purpose: Publish the middle of the search region. pTargetCoordinator
+//            uses it as the "inboard" direction: the USVs take station
+//            on the arc between the target and this point, so the pair
+//            is always between the intruder and the water it wants to
+//            stay in, and the pincer pushes it outward.
+
+void RegionDivider::postRegionCenter()
+{
+  if(!m_region_set)
+    return;
+
+  string spec = "x=" + doubleToStringX(m_region.get_centroid_x(),2);
+  spec += ",y=" + doubleToStringX(m_region.get_centroid_y(),2);
+  Notify("REGION_CENTER", spec);
 }
 
 //------------------------------------------------------------
@@ -511,6 +556,83 @@ void RegionDivider::divideAndPost()
   }
 
   m_divisions_posted++;
+
+  // Draw the lawnmower pattern ourselves, from the same spec each
+  // vehicle was just handed, rather than relying on BHV_Waypoint's own
+  // drawing. BHV_Waypoint erases its segment list the instant its
+  // condition goes false (e.g. the moment INTERCEPT engages), so the
+  // planned sweep path would disappear from the chart every time the
+  // mode changed. This copy is independent of vehicle/behavior state
+  // and stays up until the operator clears or redraws the region.
+  postSurveyPaths();
+}
+
+//------------------------------------------------------------
+// Procedure: postSurveyPaths()
+//   Purpose: Re-derive each vehicle's lawnmower pattern and post it
+//            as its own persistent VIEW_SEGLIST, independent of the
+//            vehicle's own helm/behavior state.
+
+void RegionDivider::postSurveyPaths()
+{
+  unsigned int n = m_vnames.size();
+  if(!m_region_set || (n == 0))
+    return;
+
+  double xmin = m_region.get_min_x();
+  double xmax = m_region.get_max_x();
+  double ymin = m_region.get_min_y();
+  double ymax = m_region.get_max_y();
+
+  double total_width = xmax - xmin;
+  double height       = ymax - ymin;
+  if((total_width <= 0) || (height <= 0))
+    return;
+
+  double strip_width = total_width / (double)(n);
+
+  for(unsigned int i=0; i<n; i++) {
+    string vname = m_vnames[i];
+
+    double startx  = xmin + (i * strip_width);
+    double centerx = startx + (strip_width / 2.0);
+    double centery = ymin + (height / 2.0);
+
+    string spec = "format=lawnmower";
+    spec += ", x="          + doubleToStringX(centerx,2);
+    spec += ", y="          + doubleToStringX(centery,2);
+    spec += ", height="     + doubleToStringX(height,2);
+    spec += ", width="      + doubleToStringX(strip_width,2);
+    spec += ", lane_width=" + doubleToStringX(m_lane_width,2);
+    spec += ", rows="       + m_rows;
+    spec += ", startx="     + doubleToStringX(startx,2);
+    spec += ", starty="     + doubleToStringX(ymin,2);
+
+    XYSegList segl = string2SegList(spec);
+    if(segl.size() == 0)
+      continue;
+
+    segl.set_label(vname + "_survey_path");
+    segl.set_edge_color("white");
+    segl.set_vertex_color("dodger_blue");
+    segl.set_vertex_size(2);
+    segl.set_edge_size(1);
+    segl.set_active(true);
+    Notify("VIEW_SEGLIST", segl.get_spec());
+  }
+}
+
+//------------------------------------------------------------
+// Procedure: eraseSurveyPaths()
+
+void RegionDivider::eraseSurveyPaths()
+{
+  for(unsigned int i=0; i<m_vnames.size(); i++) {
+    XYSegList segl;
+    segl.set_label(m_vnames[i] + "_survey_path");
+    segl.set_active(false);
+    Notify("VIEW_SEGLIST", segl.get_spec());
+  }
 }
 
 //------------------------------------------------------------
@@ -532,6 +654,7 @@ bool RegionDivider::buildReport()
   m_msgs << "  Clicked Vertices: " << m_vertices_x.size() << endl;
   m_msgs << "  Deployed:         " << boolToString(m_deployed) << endl;
   m_msgs << "  Divisions Posted: " << m_divisions_posted << endl;
+  m_msgs << "  Reposts Pending:  " << m_reposts_left << endl;
   if(m_grid_ready) {
     double pct = 0;
     if(m_grid.size() > 0)
