@@ -7,9 +7,21 @@
 /*      - accepts it either as a whole polygon (MISSION_POLY) or  */
 /*        as operator mouse-clicks (REGION_VERTEX), in which case */
 /*        the convex hull of the clicks is used;                  */
-/*      - slices it into N vertical (west->east) strips, one per  */
-/*        vehicle in the configured vnames list, and posts a      */
-/*        WPT_UPDATE_<VNAME> lawnmower survey pattern for each;   */
+/*      - picks the sweep axis from the region's own shape (the   */
+/*        long axis of its minimum-area bounding rectangle), so   */
+/*        lanes run as long as the water allows and the vehicles  */
+/*        make as few 180-degree turns as possible;               */
+/*      - slices the region into N bands ACROSS that sweep axis,  */
+/*        one per vehicle, so each vehicle keeps full-length      */
+/*        lanes instead of a chopped-up set of short ones;        */
+/*      - lays a search pattern into each band -- the operator    */
+/*        chooses lawnmower / skip / spiral / perimeter at run    */
+/*        time via SEARCH_PATTERN -- and posts it as a            */
+/*        WPT_UPDATE_<VNAME> point list;                          */
+/*      - sizes the lane spacing from the sensor range (visual    */
+/*        range) rather than a fixed number, and pulls the lane   */
+/*        ends in by the same range, so no distance is spent      */
+/*        driving over water the sensor already sees;             */
 /*      - tracks which parts of the region have been swept and    */
 /*        shades them via a VIEW_GRID coverage grid.              */
 /*****************************************************************/
@@ -23,6 +35,7 @@
 #include "MOOS/libMOOS/Thirdparty/AppCasting/AppCastingMOOSApp.h"
 #include "MOOS/libMOOSGeodesy/MOOSGeodesy.h"
 #include "XYPolygon.h"
+#include "XYSegList.h"
 #include "XYConvexGrid.h"
 
 class NodeRecord;
@@ -43,6 +56,8 @@ class RegionDivider : public AppCastingMOOSApp
   void registerVariables();
 
   bool  setRegion(std::string poly_str);
+  bool  setPattern(std::string pattern);
+  bool  setSensorRadius(std::string val);
   bool  recordPosition(const NodeRecord&, double& x, double& y);
   void  handleMailRegionVertex(std::string);
   void  handleMailNodeReport(std::string);
@@ -57,14 +72,29 @@ class RegionDivider : public AppCastingMOOSApp
   void  postCoverageUpdates();
   void  postRegionPoly();
 
+ protected: // Planning
+  double    laneWidth() const;
+  double    sweepAngle() const;
+  bool      buildPlans();
+  XYSegList buildBandPath(double sweep_ang, double v_lo, double v_hi) const;
+  XYSegList buildBoustrophedon(double sweep_ang, double v_lo, double v_hi,
+			       bool skip) const;
+  XYSegList buildSpiral(double sweep_ang, double v_lo, double v_hi,
+			bool single_loop) const;
+  bool      laneExtent(double sweep_ang, double v, double& u_a, double& u_b) const;
+
  protected: // Geodesy
   CMOOSGeodesy m_geodesy;
   bool         m_geodesy_ok;
 
  protected: // Configuration variables
   std::vector<std::string> m_vnames;
-  double                   m_lane_width;
-  std::string              m_rows;
+  double                   m_lane_width;      // used when auto sizing is off
+  bool                     m_auto_lane_width; // derive spacing from sensor range
+  double                   m_lane_overlap;    // fraction of swath re-covered
+  double                   m_endpoint_inset;  // fraction of sensor range
+  std::string              m_pattern;         // lawnmower|skip|spiral|perimeter
+  std::string              m_sweep_align;     // auto|north-south|east-west
   std::string              m_default_region_str;
   bool                     m_coverage_enabled;
   double                   m_cell_size;
@@ -79,6 +109,12 @@ class RegionDivider : public AppCastingMOOSApp
 
   std::vector<double> m_vertices_x;
   std::vector<double> m_vertices_y;
+
+  // One planned path per vehicle, index-aligned with m_vnames.
+  std::vector<XYSegList> m_plans;
+  std::vector<double>    m_plan_length;
+  std::vector<unsigned int> m_plan_turns;
+  double                 m_plan_sweep_ang;
 
   double       m_repost_interval;
   unsigned int m_reposts_per_deploy;
