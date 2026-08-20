@@ -50,6 +50,20 @@ ProcessConfig = pShare
   output = src_name=REGION_CLEAR,      route=localhost:$(MSHIP_PSHARE=9205)
   output = src_name=DEPLOY_ALL,        route=localhost:$(MSHIP_PSHARE=9205)
   output = src_name=TARGET_ALERT_ALL,  route=localhost:$(MSHIP_PSHARE=9205)
+
+  // Search-plan controls: which pattern to lay into each band, and how
+  // far the sensor sees (which sets the lane spacing and how far the
+  // lane ends can be trimmed).
+  output = src_name=SEARCH_PATTERN,    route=localhost:$(MSHIP_PSHARE=9205)
+  output = src_name=SENSOR_RADIUS,     route=localhost:$(MSHIP_PSHARE=9205)
+
+  // Operator-drawn route for the intruder, straight down to the target
+  // community where pTargetPathPlanner turns it into a TGT_WPT_UPDATE.
+  output = src_name=TARGET_PATH_VERTEX, route=localhost:$(TARGET_PSHARE=9203)
+  output = src_name=TARGET_PATH_CLEAR,  route=localhost:$(TARGET_PSHARE=9203)
+  output = src_name=TARGET_PATH_UNDO,   route=localhost:$(TARGET_PSHARE=9203)
+  output = src_name=TARGET_PATH_APPLY,  route=localhost:$(TARGET_PSHARE=9203)
+  output = src_name=TARGET_PATH_ROUTE,  route=localhost:$(TARGET_PSHARE=9203)
 }
 
 #include plugs.moos <uProcessWatch>
@@ -203,6 +217,12 @@ ProcessConfig = pMarineViewer
   // enough and every further click refines the shape.
   left_context[region] = REGION_VERTEX = x=$[XPOS],y=$[YPOS]
 
+  // Draw the intruder's patrol route: pick "target_path" in the mouse
+  // context menu, then left-click the waypoints IN ORDER. Unlike the
+  // region, click order is the route order and the shape need not be
+  // convex. The route takes effect as soon as there are two points.
+  left_context[target_path] = TARGET_PATH_VERTEX = x=$[XPOS],y=$[YPOS]
+
   cmd = label=DEPLOY, var=DEPLOY,              sval=true,  receivers=all:$(VNAMES)
   cmd = label=DEPLOY, var=MOOS_MANUAL_OVERRIDE, sval=false, receivers=all:$(VNAMES)
   cmd = label=DEPLOY, var=AVOID,               sval=true,  receivers=all:$(VNAMES)
@@ -269,6 +289,32 @@ ProcessConfig = pMarineViewer
   // fall-back default.
   button_nine  = REGION:CLEAR # REGION_CLEAR = true
   button_ten   = REGION:DEFAULT # MISSION_POLY = pts={-70,-10:210,-10:210,-130:-70,-130}
+
+  // Search pattern. Re-plans and re-tasks both USVs immediately, so
+  // the patterns can be compared against each other mid-mission.
+  //   LAWN   - adjacent lanes; shortest path, tightest 180s
+  //   SKIP   - every other lane out, the missed ones back; the turns
+  //            are then two lane widths wide instead of one, which is
+  //            what actually removes the hard cornering
+  //   SPIRAL - inward rectangular spiral of the band
+  //   PERIM  - single boundary loop of the band
+  button_eleven   = PAT:LAWN   # SEARCH_PATTERN = lawnmower
+  button_twelve   = PAT:SKIP   # SEARCH_PATTERN = skip
+  button_thirteen = PAT:SPIRAL # SEARCH_PATTERN = spiral
+  button_fourteen = PAT:PERIM  # SEARCH_PATTERN = perimeter
+
+  // Sensor (visual) range. Lane spacing is 2*range less a 10% seam and
+  // the lane ends are pulled in by 0.7*range, so a longer range means
+  // fewer, shorter lanes and noticeably less distance driven. Watch the
+  // "Path Length" column in the pRegionDivider appcast change.
+  button_fifteen  = SEE:10m # SENSOR_RADIUS = 10
+  button_sixteen  = SEE:20m # SENSOR_RADIUS = 20
+  button_seventeen = SEE:30m # SENSOR_RADIUS = 30
+
+  // Intruder route drawing (see left_context[target_path] above).
+  button_eighteen = TGT:UNDO  # TARGET_PATH_UNDO = true
+  button_nineteen = TGT:CLEAR # TARGET_PATH_CLEAR = true
+  button_twenty   = TGT:APPLY # TARGET_PATH_APPLY = true
 }
 
 //--------------------------------------------------------

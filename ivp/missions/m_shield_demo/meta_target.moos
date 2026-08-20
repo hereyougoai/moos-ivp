@@ -29,6 +29,7 @@ Processconfig = ANTLER
   Run = uFldNodeBroker @ NewConsole = false
   Run = uSimMarineV22  @ NewConsole = false
   Run = pContactMgrV20 @ NewConsole = false
+  Run = pTargetPathPlanner @ NewConsole = false
 }
 
 #include plugs.moos <pShare>
@@ -145,6 +146,36 @@ ProcessConfig = pMarinePIDV22
   maxrudder    = 100
   maxthrust    = 100
   speed_factor = 20
+}
+
+//--------------------------------------------------
+// pTargetPathPlanner Config Block
+//
+// The operator's route for this vessel. Pick "target_path" in the
+// pMarineViewer mouse-context menu and left-click the waypoints in
+// order; the clicks arrive here as TARGET_PATH_VERTEX (pShare'd down
+// from the shoreside) and go straight into the patrol behavior.
+//
+// It lives in this community rather than on the shoreside so the route
+// update is a local post to the helm -- no relay, and no chance of the
+// pShare input/output collision that bit the mothership's tasking.
+
+ProcessConfig = pTargetPathPlanner
+{
+  AppTick   = 2
+  CommsTick = 2
+
+  update_var  = TGT_WPT_UPDATE
+  route_label = target_route
+
+  // Apply as soon as there are two points, so the route takes effect
+  // while it is being drawn rather than only on the APPLY button.
+  auto_apply  = true
+  close_loop  = true
+
+  // The launch script's built-in patrol: what the vessel flies until
+  // the operator draws something else.
+  default_route = $(TGT_PATROL)
 }
 
 //--------------------------------------------------

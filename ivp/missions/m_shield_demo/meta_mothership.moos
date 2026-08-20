@@ -88,18 +88,55 @@ ProcessConfig = pLogger
 
 //--------------------------------------------------
 // pRegionDivider Config Block
-// Slices the operator's MISSION_POLY (or, absent that, a default
-// region) into one west->east strip per vehicle in $(VNAMES) and
-// posts each a lawnmower WPT_UPDATE_<VNAME>.
+//
+// Plans the fleet's sweep of the operator's MISSION_POLY (or, absent
+// that, a default region) and posts each vehicle a WPT_UPDATE_<VNAME>
+// point list.
+//
+// Three things about the plan are worth knowing:
+//
+//  1. The lanes run along the region's own long axis, found from the
+//     minimum-area bounding rectangle, not along a fixed east-west
+//     compass line. A region drawn on a diagonal used to be swept in
+//     many short east-west lanes with a hard 180 at the end of each;
+//     now the lanes follow the region and there are far fewer turns.
+//
+//  2. The region is cut into one band per vehicle ACROSS that lane
+//     axis. Cutting the other way (the old west->east strips) halves
+//     the length of every lane and so doubles the number of turns for
+//     exactly the same water covered.
+//
+//  3. Lane spacing is not a fixed number; it comes from sensor_radius.
+//     A sensor seeing 15 m in every direction covers a 30 m swath, so
+//     lanes sit 27 m apart (10% seam) rather than the old fixed 20 m,
+//     and the lane ends stop 0.7*15 m short of the boundary because
+//     the sensor already sees that far ahead. Both cut distance driven
+//     without leaving water unsearched.
 
 ProcessConfig = pRegionDivider
 {
   AppTick   = 2
   CommsTick = 2
 
-  vnames     = $(VNAMES)
-  lane_width = 20
-  rows       = east-west
+  vnames = $(VNAMES)
+
+  // Operator-selectable at run time via SEARCH_PATTERN
+  // (lawnmower | skip | spiral | perimeter) -- see the PAT:* buttons.
+  pattern     = lawnmower
+
+  // "auto" takes the sweep direction from the region shape. Force it
+  // with east-west / north-south if a fixed heading is wanted.
+  sweep_align = auto
+
+  // Sensor / visual range, in metres. Drives the lane spacing, the
+  // lane-end trimming, and the coverage shading. Adjustable at run
+  // time via SENSOR_RADIUS (the SEE:* buttons).
+  sensor_radius   = 15
+  auto_lane_width = true
+  lane_overlap    = 0.10
+  endpoint_inset  = 0.70
+
+  cell_size = 10
 
   // Falls back to this if DEPLOY_ALL fires before the operator has
   // ever pressed REGION to send a MISSION_POLY up from the shoreside.

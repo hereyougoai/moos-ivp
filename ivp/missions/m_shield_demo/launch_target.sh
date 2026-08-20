@@ -61,6 +61,9 @@ for ARGI; do
 	echo "  --color=<orange>       Target vessel color   "
 	echo "  --start_pos=<..>       Target start position "
 	echo "  --spd=<0.8>            Target patrol speed   "
+	echo "  --patrol=<x,y:x,y:..>  Starting patrol route "
+	echo "                         (operator can redraw  "
+	echo "                          it live in the GUI)  "
 	echo "  --mmod=<mod>           Mission variation/mod "
 	exit 0;
     elif [ "${ARGI//[^0-9]/}" = "$ARGI" -a "$TIME_WARP" = 1 ]; then
@@ -87,6 +90,8 @@ for ARGI; do
         START_POS="${ARGI#--start_pos=*}"
     elif [ "${ARGI:0:6}" = "--spd=" ]; then
         TGT_SPD="${ARGI#--spd=*}"
+    elif [ "${ARGI:0:9}" = "--patrol=" ]; then
+        TGT_PATROL="${ARGI#--patrol=*}"
     elif [ "${ARGI:0:7}" = "--mmod=" ]; then
         MMOD="${ARGI#--mmod=*}"
     else
@@ -128,7 +133,8 @@ nsplug meta_target.moos targ_$VNAME.moos $NSFLAGS WARP=$TIME_WARP \
        PSHARE_PORT=$PSHARE_PORT     SHORE_IP=$SHORE_IP     \
        SHORE_PSHARE=$SHORE_PSHARE   VNAME=$VNAME           \
        COLOR=$COLOR                 START_POS=$START_POS   \
-       MAX_SPD=$MAX_SPD             MMOD=$MMOD
+       MAX_SPD=$MAX_SPD             MMOD=$MMOD             \
+       TGT_PATROL=$TGT_PATROL
 
 nsplug meta_target.bhv targ_$VNAME.bhv $NSFLAGS \
        VNAME=$VNAME                 TGT_SPD=$TGT_SPD   \
