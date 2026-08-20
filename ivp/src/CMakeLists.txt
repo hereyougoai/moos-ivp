@@ -191,7 +191,7 @@ SET(IVP_NON_GUI_APPS
   pSearchGrid        uFldGenericSensor   uFldContactRangeSensor
   uFldDelve          app_bweb            app_mhash_gen
   app_projfield      pMapMarkers         pSpoofNode
-  pRegionDivider     pTargetCoordinator
+  pRegionDivider     pTargetCoordinator  pTargetPathPlanner
 )
 SET(IVP_GUI_APPS
   app_ffview         app_geoview         app_alogview
