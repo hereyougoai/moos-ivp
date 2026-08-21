@@ -125,6 +125,7 @@ RegionDivider::RegionDivider()
   m_cell_size          = 10;
   m_sensor_radius      = 15;
   m_grid_label         = "coverage";
+  m_repeat_count       = 999;
 
   m_region_set        = false;
   m_deployed          = false;
@@ -328,6 +329,8 @@ bool RegionDivider::OnStartUp()
 	handled = setPosDoubleOnString(m_repost_interval, value);
       else if(param == "reposts_per_deploy")
 	handled = setUIntOnString(m_reposts_per_deploy, value);
+      else if(param == "repeat_count")
+	handled = setUIntOnString(m_repeat_count, value);
 
       if(!handled)
 	reportUnhandledConfigWarning(orig);
@@ -376,9 +379,17 @@ bool RegionDivider::setPattern(string pattern)
     val = "spiral";
   else if((val == "boundary") || (val == "perim"))
     val = "perimeter";
+  else if((val == "fan") || (val == "sector-search") || (val == "wedge"))
+    val = "sector";
+  else if((val == "picket") || (val == "barrier-patrol") || (val == "blockade"))
+    val = "barrier";
+  else if((val == "fig8") || (val == "eight") || (val == "figure-eight") ||
+	  (val == "figure_8") || (val == "lemniscate"))
+    val = "figure8";
 
   if((val != "lawnmower") && (val != "skip") &&
-     (val != "spiral") && (val != "perimeter"))
+     (val != "spiral") && (val != "perimeter") &&
+     (val != "sector") && (val != "barrier") && (val != "figure8"))
     return(false);
 
   m_pattern = val;
@@ -515,6 +526,8 @@ void RegionDivider::clearRegion()
 
   eraseSurveyPaths();
 
+  Notify("REGION_POLY", "none");
+
   m_region_set   = false;
   m_reposts_left = 0;
   m_grid_ready  = false;
@@ -539,6 +552,12 @@ void RegionDivider::postRegionPoly()
   poly.set_vertex_color("dodger_blue");
   poly.set_active(true);
   Notify("VIEW_POLYGON", poly.get_spec());
+
+  // Machine-readable copy of the region for the other coordinator apps
+  // in this community. pTargetCoordinator needs the actual boundary,
+  // not just the centroid, to tell whether an intruder has really been
+  // pushed out of the search area.
+  Notify("REGION_POLY", m_region.get_spec_pts(2));
 
   postRegionCenter();
 }
@@ -789,7 +808,8 @@ double RegionDivider::sweepAngle() const
 //            covers nothing new.
 
 bool RegionDivider::laneExtent(double sweep_ang, double v,
-			       double& u_a, double& u_b) const
+			       double& u_a, double& u_b,
+			       bool trim_ends) const
 {
   unsigned int n = m_region.size();
   if(n < 3)
@@ -815,11 +835,18 @@ bool RegionDivider::laneExtent(double sweep_ang, double v,
   u_a = (x1 < x2) ? x1 : x2;
   u_b = (x1 < x2) ? x2 : x1;
 
-  double inset = m_endpoint_inset * m_sensor_radius;
   double length = u_b - u_a;
   if(length <= 0)
     return(false);
 
+  // Callers that are placing things ACROSS the lanes rather than
+  // driving along one want the true extent: the trim is there because
+  // the sensor already sees ahead along the lane, which says nothing
+  // about where a crossing line should start.
+  if(!trim_ends)
+    return(length > 0.5);
+
+  double inset = m_endpoint_inset * m_sensor_radius;
   if(length > (2.5 * inset)) {
     u_a += inset;
     u_b -= inset;
@@ -836,6 +863,450 @@ bool RegionDivider::laneExtent(double sweep_ang, double v,
   }
 
   return((u_b - u_a) > 0.5);
+}
+
+//------------------------------------------------------------
+// Procedure: bandExtent()
+//   Purpose: How far the band reaches along the lane axis, taken as
+//            the union of the lane extents sampled across the band.
+//            The band is a slab of the bounding rectangle while the
+//            region underneath it may be narrower, so a single sample
+//            in the middle would overstate a tapering band and a
+//            single sample at an edge would understate it.
+
+bool RegionDivider::bandExtent(double sweep_ang, double v_lo, double v_hi,
+			       double& u_lo, double& u_hi,
+			       bool trim_ends) const
+{
+  bool have = false;
+  double span = v_hi - v_lo;
+  unsigned int samples = 9;
+
+  for(unsigned int i=0; i<samples; i++) {
+    double v = v_lo;
+    if(span > 0)
+      v = v_lo + ((span * i) / (double)(samples - 1));
+
+    double a, b;
+    if(!laneExtent(sweep_ang, v, a, b, trim_ends))
+      continue;
+    if(!have || (a < u_lo)) u_lo = a;
+    if(!have || (b > u_hi)) u_hi = b;
+    have = true;
+
+    if(span <= 0)
+      break;
+  }
+
+  return(have);
+}
+
+//------------------------------------------------------------
+// Procedure: crossExtent()
+//   Purpose: Where a line ACROSS the lanes -- constant u, running in v
+//            -- enters and leaves the band. This is the mirror of
+//            laneExtent(): the region clips it at both ends, the band
+//            edges clip it too, and the ends are pulled in by the
+//            sensor range for the same reason.
+
+bool RegionDivider::crossExtent(double sweep_ang, double u,
+				double v_lo, double v_hi,
+				double& v_a, double& v_b) const
+{
+  unsigned int n = m_region.size();
+  if(n < 3)
+    return(false);
+
+  vector<double> px, py;
+  double vmin = 0, vmax = 0;
+  for(unsigned int k=0; k<n; k++) {
+    double uu, vv;
+    worldToSweep(m_region.get_vx(k), m_region.get_vy(k), sweep_ang, uu, vv);
+    px.push_back(uu);
+    py.push_back(vv);
+    if((k == 0) || (vv < vmin)) vmin = vv;
+    if((k == 0) || (vv > vmax)) vmax = vv;
+  }
+
+  double pad = 10 + (vmax - vmin);
+  double x1, y1, x2, y2;
+  if(!clipSegToConvex(px, py, u, vmin - pad, u, vmax + pad, x1, y1, x2, y2))
+    return(false);
+
+  v_a = (y1 < y2) ? y1 : y2;
+  v_b = (y1 < y2) ? y2 : y1;
+
+  // Stay inside our own band -- the neighbouring vehicle owns the rest.
+  if(v_a < v_lo) v_a = v_lo;
+  if(v_b > v_hi) v_b = v_hi;
+
+  double inset  = m_endpoint_inset * m_sensor_radius;
+  double length = v_b - v_a;
+  if(length <= 0)
+    return(false);
+
+  if(length > (2.5 * inset)) {
+    v_a += inset;
+    v_b -= inset;
+  }
+  else {
+    double mid  = (v_a + v_b) / 2.0;
+    double half = length / 4.0;
+    if(half < 1)
+      half = (length / 2.0);
+    v_a = mid - half;
+    v_b = mid + half;
+  }
+
+  return((v_b - v_a) > 0.5);
+}
+
+//------------------------------------------------------------
+// Procedure: rayReach()
+//   Purpose: How far a ray from (u0,v0) can run before it leaves the
+//            region or the band. Used by the fan search, where every
+//            leg is a different direction and so cannot be clipped by
+//            the fixed-axis lane/cross helpers.
+//
+//            The region part is a parametric clip of the ray against
+//            the convex boundary; the band part is the single value of
+//            t at which v crosses whichever band edge the ray heads
+//            for. The shorter of the two wins, and the rim is then
+//            pulled in by the sensor range as everywhere else.
+
+bool RegionDivider::rayReach(double sweep_ang, double u0, double v0,
+			     double ray_ang, double v_lo, double v_hi,
+			     double& reach) const
+{
+  unsigned int n = m_region.size();
+  if(n < 3)
+    return(false);
+
+  vector<double> px, py;
+  double umin=0, umax=0, vmin=0, vmax=0;
+  for(unsigned int k=0; k<n; k++) {
+    double uu, vv;
+    worldToSweep(m_region.get_vx(k), m_region.get_vy(k), sweep_ang, uu, vv);
+    px.push_back(uu);
+    py.push_back(vv);
+    if((k == 0) || (uu < umin)) umin = uu;
+    if((k == 0) || (uu > umax)) umax = uu;
+    if((k == 0) || (vv < vmin)) vmin = vv;
+    if((k == 0) || (vv > vmax)) vmax = vv;
+  }
+
+  double far = 10 + hypot(umax - umin, vmax - vmin);
+  double du  = far * cos(ray_ang);
+  double dv  = far * sin(ray_ang);
+
+  double x1, y1, x2, y2;
+  if(!clipSegToConvex(px, py, u0, v0, u0 + du, v0 + dv, x1, y1, x2, y2))
+    return(false);
+
+  // The origin is inside the region, so the clip starts there and the
+  // far end is what we want.
+  reach = hypot(x2 - u0, y2 - v0);
+
+  // Band edge the ray is heading for.
+  if(fabs(dv) > 1e-9) {
+    double edge  = (dv > 0) ? v_hi : v_lo;
+    double t     = (edge - v0) / dv;
+    if(t >= 0) {
+      double band_reach = t * far;
+      if(band_reach < reach)
+	reach = band_reach;
+    }
+  }
+
+  double inset = m_endpoint_inset * m_sensor_radius;
+  if(reach > (2.0 * inset))
+    reach -= inset;
+
+  return(reach > 1.0);
+}
+
+//------------------------------------------------------------
+// Procedure: addSweepPoint()
+//   Purpose: Append a sweep-frame point to a path in world
+//            coordinates, pulled back onto the region boundary if the
+//            geometry put it over water outside the mission area.
+
+void RegionDivider::addSweepPoint(XYSegList& segl, double u, double v,
+				  double sweep_ang) const
+{
+  double x, y;
+  sweepToWorld(u, v, sweep_ang, x, y);
+  if(!m_region.contains(x, y)) {
+    double rx, ry;
+    if(m_region.closest_point_on_poly(x, y, rx, ry)) {
+      x = rx;
+      y = ry;
+    }
+  }
+  segl.add_vertex(x, y);
+}
+
+//------------------------------------------------------------
+// Procedure: patternCoversBand()
+//   Purpose: Whether the pattern visits the whole of the vehicle's
+//            band or only part of it. Everything covers except the
+//            perimeter loop, which by definition only walks the
+//            boundary -- that is the one pattern where an unshaded
+//            middle on the coverage grid is the correct outcome and
+//            not a bug in the plan.
+
+bool RegionDivider::patternCoversBand() const
+{
+  return(m_pattern != "perimeter");
+}
+
+//------------------------------------------------------------
+// Procedure: buildSector()
+//   Purpose: Fan (sector) search -- legs radiating from a datum out to
+//            the edge of the band, all the way round.
+//
+//            The first version put the datum at the near END of the
+//            band and fanned forward through the wedge that the band
+//            subtends from there. On a long thin band that wedge is
+//            only a few degrees wide, so the legs stayed bunched near
+//            the centre line and the outer corners of the near half of
+//            the band were never touched at all -- it looked like a
+//            fan but it did not search the area.
+//
+//            The datum is now the middle of the band and the legs go
+//            all the way round it. Leg spacing is set from the LONGEST
+//            leg: neighbouring legs are then at most one lane width
+//            apart where they are furthest from each other, and closer
+//            than that everywhere else, so the band is covered in
+//            full. The characteristic fan property survives -- water
+//            near the datum is re-covered many times over, which is
+//            what makes this the pattern to use when the intruder was
+//            last seen near a known point -- and it is paid for in
+//            distance, so expect a longer path than a lane sweep.
+
+XYSegList RegionDivider::buildSector(double sweep_ang,
+				     double v_lo, double v_hi) const
+{
+  XYSegList segl;
+
+  double u_lo, u_hi;
+  if(!bandExtent(sweep_ang, v_lo, v_hi, u_lo, u_hi))
+    return(segl);
+
+  double lw = laneWidth();
+  if(lw <= 0)
+    return(segl);
+
+  double u_c = (u_lo + u_hi) / 2.0;
+  double v_c = (v_lo + v_hi) / 2.0;
+
+  // Longest leg, from a coarse sweep, sets how many legs are needed.
+  double longest = 0;
+  for(unsigned int i=0; i<72; i++) {
+    double ang = (2.0 * M_PI * i) / 72.0;
+    double r;
+    if(rayReach(sweep_ang, u_c, v_c, ang, v_lo, v_hi, r) && (r > longest))
+      longest = r;
+  }
+  if(longest <= 1)
+    return(segl);
+
+  unsigned int legs = (unsigned int)ceil((2.0 * M_PI * longest) / lw);
+  if(legs < 8)
+    legs = 8;
+  if(legs > 64)
+    legs = 64;
+
+  double r_in = lw / 4.0;
+
+  for(unsigned int i=0; i<legs; i++) {
+    double ang = (2.0 * M_PI * i) / (double)legs;
+
+    double r;
+    if(!rayReach(sweep_ang, u_c, v_c, ang, v_lo, v_hi, r))
+      continue;
+
+    double near_r = (r_in < (r / 2.0)) ? r_in : (r / 2.0);
+    double c = cos(ang), sn = sin(ang);
+
+    // Alternate out/in so consecutive legs join near the datum instead
+    // of retracing the leg just flown.
+    if(i % 2 == 0) {
+      addSweepPoint(segl, u_c + (near_r * c), v_c + (near_r * sn), sweep_ang);
+      addSweepPoint(segl, u_c + (r * c),      v_c + (r * sn),      sweep_ang);
+    }
+    else {
+      addSweepPoint(segl, u_c + (r * c),      v_c + (r * sn),      sweep_ang);
+      addSweepPoint(segl, u_c + (near_r * c), v_c + (near_r * sn), sweep_ang);
+    }
+  }
+
+  return(segl);
+}
+
+//------------------------------------------------------------
+// Procedure: buildBarrier()
+//   Purpose: Barrier (picket) patrol -- a line ACROSS the band, run end
+//            to end, that then steps along the band and runs again.
+//
+//            Each individual leg is a barrier: it lies across the lane
+//            axis, which is the long axis of the region and therefore
+//            the direction anything transiting the area is most likely
+//            travelling. What the vehicle does is hold that barrier and
+//            walk it along the region, so over a lap the whole band has
+//            been stood in front of.
+//
+//            The first version was a single line down the middle of the
+//            band, shuttled forever. That is a barrier, but it searches
+//            nothing: the rest of the band was never visited. Stepping
+//            the line along at one lane width per leg keeps the barrier
+//            character and covers the band in full.
+//
+//            Note this is NOT the lawnmower with a different name: the
+//            lawnmower's lanes run ALONG the region's long axis and are
+//            few and very long, while these run across it and are many
+//            and short. The vehicle spends its time crossing the
+//            transit direction rather than running parallel to it.
+
+XYSegList RegionDivider::buildBarrier(double sweep_ang,
+				      double v_lo, double v_hi) const
+{
+  XYSegList segl;
+
+  // Untrimmed: the lane-end trim exists because the sensor sees ahead
+  // ALONG a lane. These legs run across the lanes, so trimming the u
+  // range would stand the outermost barrier a full lane width plus the
+  // trim inside the region and leave a strip at each end of the band
+  // that nothing ever passes close enough to see.
+  double u_lo, u_hi;
+  if(!bandExtent(sweep_ang, v_lo, v_hi, u_lo, u_hi, false))
+    return(segl);
+
+  double lw   = laneWidth();
+  double span = u_hi - u_lo;
+  if((lw <= 0) || (span <= 0))
+    return(segl);
+
+  // Same rounding-up argument as the lane sweep: rounding down leaves a
+  // strip narrower than one line completely unvisited at the end of the
+  // band, which on the coverage grid never fills in.
+  unsigned int lines = (unsigned int)(ceil((span / lw) - 1e-9));
+  if(lines < 1)
+    lines = 1;
+
+  double used = lines * lw;
+  double base = u_lo + ((span - used) / 2.0) + (lw / 2.0);
+
+  bool forward = true;
+  for(unsigned int i=0; i<lines; i++) {
+    double u = base + (i * lw);
+
+    double v_a, v_b;
+    if(!crossExtent(sweep_ang, u, v_lo, v_hi, v_a, v_b))
+      continue;
+
+    double first = forward ? v_a : v_b;
+    double last  = forward ? v_b : v_a;
+
+    addSweepPoint(segl, u, first, sweep_ang);
+    addSweepPoint(segl, u, last,  sweep_ang);
+
+    forward = !forward;
+  }
+
+  return(segl);
+}
+
+//------------------------------------------------------------
+// Procedure: buildFigureEight()
+//   Purpose: Figure-of-eight patrol, as a CHAIN of lemniscate lobes
+//            laid end to end along the band.
+//
+//            The first version was one single lemniscate spanning the
+//            whole band. A lemniscate is a curve, not an area: one of
+//            them over a 250 m band leaves almost all of the band
+//            unvisited. A chain of short lobes, each spanning the full
+//            band width, sweeps the band the way a zigzag does while
+//            keeping the figure-of-eight shape.
+//
+//            Each lobe is the lemniscate of Gerono, in band coords:
+//              u = u_k + A*cos(t)
+//              v = v_c + B*sin(t)*cos(t)
+//
+//            and the chain is flown in two passes. Going out, each lobe
+//            is flown for t in [pi, 2*pi], which enters at its left
+//            extreme and leaves at its right -- exactly the left
+//            extreme of the next lobe, so the whole outward chain is
+//            one continuous line. Coming back, the same lobes are flown
+//            for t in [2*pi, 3*pi], which is the other half of each
+//            figure. Only after both passes is any given eight closed,
+//            and the path as a whole is a single loop with no retraced
+//            leg anywhere in it.
+//
+//            Lobe half-length A is 0.6 lane widths, which is what the
+//            coverage costs: the point hardest for the sensor to reach
+//            is the band edge directly above a crossing, and the
+//            nearest the track gets to it is 0.707*A away. At 0.6 lane
+//            widths that is about 0.76 of the sensor range, so it is
+//            seen; make the lobes much longer and holes open up above
+//            and below every crossing.
+//
+//            Every turn is a shallow constant-radius one -- there is no
+//            180 anywhere in the figure -- so speed is held through the
+//            turns in a way no lane pattern manages.
+
+XYSegList RegionDivider::buildFigureEight(double sweep_ang,
+					  double v_lo, double v_hi) const
+{
+  XYSegList segl;
+
+  double u_lo, u_hi;
+  if(!bandExtent(sweep_ang, v_lo, v_hi, u_lo, u_hi))
+    return(segl);
+
+  double lw   = laneWidth();
+  double span = u_hi - u_lo;
+  double band = v_hi - v_lo;
+  if((lw <= 0) || (span <= 0) || (band <= 0))
+    return(segl);
+
+  double lobe_len = 1.2 * lw;             // 2*A, see the note above
+  unsigned int lobes = (unsigned int)(ceil((span / lobe_len) - 1e-9));
+  if(lobes < 1)
+    lobes = 1;
+  if(lobes > 60)
+    lobes = 60;
+
+  double amp_u = span / (2.0 * (double)lobes);
+  double v_c   = (v_lo + v_hi) / 2.0;
+  double amp_v = 0.95 * band;   // sin*cos peaks at 0.5, so 0.475*band
+
+  unsigned int steps = 8;       // samples per half-lobe
+
+  // Outward pass: t in [pi, 2*pi] on each lobe, left to right.
+  for(unsigned int k=0; k<lobes; k++) {
+    double u_k = u_lo + amp_u + (2.0 * amp_u * k);
+    for(unsigned int i=0; i<=steps; i++) {
+      // The lobes share endpoints, so skip the duplicate start.
+      if((k > 0) && (i == 0))
+	continue;
+      double t = M_PI + ((M_PI * i) / (double)steps);
+      addSweepPoint(segl, u_k + (amp_u * cos(t)),
+		    v_c + (amp_v * sin(t) * cos(t)), sweep_ang);
+    }
+  }
+
+  // Return pass: t in [2*pi, 3*pi] on each lobe, right to left.
+  for(int k=(int)lobes-1; k>=0; k--) {
+    double u_k = u_lo + amp_u + (2.0 * amp_u * k);
+    for(unsigned int i=1; i<=steps; i++) {
+      double t = (2.0 * M_PI) + ((M_PI * i) / (double)steps);
+      addSweepPoint(segl, u_k + (amp_u * cos(t)),
+		    v_c + (amp_v * sin(t) * cos(t)), sweep_ang);
+    }
+  }
+
+  return(segl);
 }
 
 //------------------------------------------------------------
@@ -936,18 +1407,7 @@ XYSegList RegionDivider::buildSpiral(double sweep_ang,
   // Outer extent of the band along the lane axis, taken at the widest
   // lane in the band so the ring encloses as much of it as possible.
   double u_lo = 0, u_hi = 0;
-  bool have_extent = false;
-  for(double v=v_lo; v<=v_hi+1e-9; v+=(v_hi-v_lo)/8.0) {
-    double a, b;
-    if(!laneExtent(sweep_ang, v, a, b))
-      continue;
-    if(!have_extent || (a < u_lo)) u_lo = a;
-    if(!have_extent || (b > u_hi)) u_hi = b;
-    have_extent = true;
-    if((v_hi - v_lo) <= 0)
-      break;
-  }
-  if(!have_extent)
+  if(!bandExtent(sweep_ang, v_lo, v_hi, u_lo, u_hi))
     return(segl);
 
   double a0 = u_lo, a1 = u_hi;
@@ -1013,6 +1473,12 @@ XYSegList RegionDivider::buildBandPath(double sweep_ang,
     return(buildSpiral(sweep_ang, v_lo, v_hi, false));
   if(m_pattern == "perimeter")
     return(buildSpiral(sweep_ang, v_lo, v_hi, true));
+  if(m_pattern == "sector")
+    return(buildSector(sweep_ang, v_lo, v_hi));
+  if(m_pattern == "barrier")
+    return(buildBarrier(sweep_ang, v_lo, v_hi));
+  if(m_pattern == "figure8")
+    return(buildFigureEight(sweep_ang, v_lo, v_hi));
 
   return(buildBoustrophedon(sweep_ang, v_lo, v_hi, false));
 }
@@ -1100,6 +1566,16 @@ void RegionDivider::divideAndPost()
     // which the built-in lawnmower generator can express.
     string spec = "points = " + segl.get_spec_pts_label();
 
+    // Every pattern is re-flown rather than driven once. A vehicle
+    // that reached its last waypoint used to stop dead and sit there,
+    // which for the patrol patterns (barrier, figure-of-eight) makes
+    // no sense at all, and for the sweeps left the fleet idle for the
+    // rest of the mission instead of continuing to watch the area.
+    // It also matters for the auto-intercept handover: after a target
+    // has been driven off, the vehicles drop back into this behavior
+    // and have to keep searching for the next one.
+    spec += " # repeat = " + uintToString(m_repeat_count);
+
     Notify("WPT_UPDATE_" + vname_upper, spec);
   }
 
@@ -1163,7 +1639,9 @@ bool RegionDivider::buildReport()
   m_msgs << "Configuration:" << endl;
   m_msgs << "  Vehicles:      " << stringVectorToString(m_vnames, ':') << endl;
   m_msgs << "  Pattern:       " << m_pattern
-	 << "   (SEARCH_PATTERN: lawnmower|skip|spiral|perimeter)" << endl;
+	 << (patternCoversBand() ? "  [covers band]" : "  [boundary only]") << endl;
+  m_msgs << "                 (SEARCH_PATTERN: lawnmower|skip|spiral|" << endl;
+  m_msgs << "                  perimeter|sector|barrier|figure8)" << endl;
   m_msgs << "  Sensor Range:  " << doubleToStringX(m_sensor_radius,1)
 	 << " m   (SENSOR_RADIUS)" << endl;
   m_msgs << "  Lane Width:    " << doubleToStringX(lw,1) << " m"
