@@ -343,6 +343,13 @@ IvPFunction *BHV_Trail::onRunState()
 void BHV_Trail::onRunToIdleState()
 {
   postMessage("PURSUIT", 0);
+
+  // Erase the grey trail point. It is posted every iteration while the
+  // behavior runs, but nothing ever took it back down: the instant the
+  // run condition went false (mode switched out of the trailing mode,
+  // or the behavior was removed) the last point stayed on the chart
+  // forever, and every subsequent trailing run left another one behind.
+  eraseViewableTrailPoint();
 }
 
 //-----------------------------------------------------------
@@ -391,6 +398,22 @@ void BHV_Trail::postViewableTrailPoint()
 
   string spec = m_trail_point.get_spec();
   postMessage("VIEW_POINT", spec);
+}
+
+//-----------------------------------------------------------
+// Procedure: eraseViewableTrailPoint()
+//   Purpose: Take the trail point back off the chart. Same label as
+//            the one posted above, with active=false, which is how
+//            pMarineViewer is told to drop a viewable.
+
+void BHV_Trail::eraseViewableTrailPoint()
+{
+  XYPoint trail_point;
+  trail_point.set_vertex(m_trail_pt_x, m_trail_pt_y);
+  trail_point.set_label(m_us_name + "_trailpoint");
+  trail_point.set_active(false);
+
+  postMessage("VIEW_POINT", trail_point.get_spec());
 }
 
 

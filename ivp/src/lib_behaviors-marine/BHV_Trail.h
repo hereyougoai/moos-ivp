@@ -46,6 +46,7 @@ protected:
   bool    handleConfigModTrailRange(double);
   bool    handleConfigModTrailRangePct(double);
   void    postViewableTrailPoint();
+  void    eraseViewableTrailPoint();
   double  updateTrailDistance();  
   void    calculateTrailPoint();
 
