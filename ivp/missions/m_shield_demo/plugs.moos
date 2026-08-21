@@ -34,6 +34,14 @@ ProcessConfig = pShare
   // Report our position straight up to the mothership coordinator as
   // well as to the shoreside (the latter is wired by uFldNodeBroker).
   output = src_name=NODE_REPORT_LOCAL, dest_name=NODE_REPORT, route=localhost:$(MSHIP_PSHARE=9205)
+
+  // Detection transitions from our own contact manager, straight up to
+  // the coordinator. Deliberately NOT called SUSPECT_TARGET: that name
+  // already has inbound routes on this vehicle (shoreside qbridge and
+  // the mothership's SUSPECT_TARGET_ALL), and pShare refuses to inject
+  // an inbound variable into the local DB once an outbound route of the
+  // same name exists.
+  output = src_name=SUSPECT_REPORT, route=localhost:$(MSHIP_PSHARE=9205)
 }
 
 <tag><uProcessWatch>

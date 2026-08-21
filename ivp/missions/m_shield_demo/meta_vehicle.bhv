@@ -156,8 +156,39 @@ Behavior = BHV_Trail
 }
 
 //----------------------------------------------
-// BHV_AvoidCollision — Spawning collision avoidance (always active)
-Behavior = BHV_AvoidCollision
+// COLREGs collision avoidance (always active)
+//
+// This was BHV_AvoidCollision, whose objective function (AOF_AvoidCollision)
+// scores every candidate course/speed on PROJECTED CPA DISTANCE ALONE. That
+// metric has no term for which side the contact is on, no give-way/stand-on
+// role, and no preferred turn direction, so the resulting manoeuvre is
+// side-agnostic: a head-on pair is as likely to resolve starboard-to-
+// starboard as port-to-port, and in a crossing BOTH vessels manoeuvre. That
+// is a direct conflict with:
+//
+//   Rule 14(a)  two power-driven vessels meeting head-on shall EACH alter
+//               course to starboard and pass on the port side of the other
+//   Rule 15     in a crossing, the vessel which has the other on her own
+//               starboard side keeps out of the way, and shall avoid
+//               crossing ahead of the other vessel
+//   Rule 16     the give-way vessel takes early and substantial action
+//   Rule 17(a)(i) the stand-on vessel KEEPS HER COURSE AND SPEED
+//   Rule 13     the overtaking vessel keeps out of the way of the
+//               overtaken vessel (our USVs are 2.5x the target's speed,
+//               so they are almost always the overtaking vessel)
+//
+// BHV_AvdColregsV22 assigns the encounter a mode -- headon / giveway /
+// standon / overtaking / cpa -- and uses a different objective function per
+// mode (AOF_R14, AOF_R16, AOF_R17...). AOF_R14, for instance, returns zero
+// utility for any solution that passes starboard-to-starboard or crosses the
+// contact's bow, so Rule 14 is expressed in the objective function itself
+// rather than hoped for.
+//
+// FULL_MODE is posted per contact so the mode in force is visible in the
+// appcast and in the logs -- compliance you can check after the run rather
+// than infer.
+
+Behavior = BHV_AvdColregsV22
 {
   name       = avdcol_
   pwt        = 300
@@ -171,16 +202,118 @@ Behavior = BHV_AvoidCollision
   extrapolate       = true
   decay             = 30,60
 
-  // Kept tighter than the 25m pincer station: at the old 30m outer
-  // distance the avoidance behavior was permanently active against the
-  // very contact the trail behavior was trying to close on, and the two
-  // fought each other instead of holding station.
-  pwt_outer_dist    = 20
-  pwt_inner_dist    = 10
-  completed_dist    = 30
-  min_util_cpa_dist = 5
-  max_util_cpa_dist = 10
-  pwt_grade         = linear
+  use_refinery          = true
+  can_disable           = true
+  // Publishes COLREGS_AVOID_MODE_<CONTACT> (headon/giveway/standon/
+  // overtaking/cpa) plus the geometry it was decided from, so which
+  // rule was in force at any moment is in the log, not inferred.
+  post_per_contact_info = true
+
+  // Scaled to the field (280 x 120 m) and to a 4 m/s head-on closing
+  // speed: 45 m is ~11 s of warning, which is what makes a single
+  // substantial alteration possible instead of the succession of small
+  // late ones Rule 8(b) tells us to avoid.
+  pwt_outer_dist    = 45
+  pwt_inner_dist    = 20
+
+  // completed_dist must sit WELL ABOVE the contact manager's
+  // alert_range (60 m), not near it. A spawned behavior retires itself
+  // at completed_dist*1.1; set that at or below the spawn range and the
+  // behavior dies the moment it is created, while the contact manager --
+  // which never saw the range cross back out -- does not re-alert. The
+  // result is a contact that is permanently "complete" and never
+  // avoided at all. That is exactly what happened to ben here: it sat
+  // at mode=complete straight through a 17.5 m head-on pass.
+  completed_dist    = 90
+
+  // Rule 8(d): the action must "result in passing at a safe distance".
+  // The old 5 m / 10 m pair was not a safe passing distance for vessels
+  // of this size at these speeds.
+  min_util_cpa_dist = 12
+  max_util_cpa_dist = 20
+
+  // Rule 14(b) defines head-on by the sidelights being in view, which
+  // is the 22.5-degree bow sector; Rule 14(c) says to ASSUME head-on
+  // when in doubt. The library default of 12 degrees is narrower than
+  // the Rule, and a near-reciprocal encounter that misses it also
+  // misses the Rule 15 crossing test (each vessel has the other on its
+  // own starboard bow, which is neither one's give-way geometry) and
+  // drops to the side-agnostic "cpa" mode. Measured here before this
+  // was raised: two USVs on reciprocal courses passed STARBOARD to
+  // starboard at 14.8 m, with the give-way-side vessel turning to port.
+  headon_abs_relbng_thresh = 22.5
+
+  pwt_grade = linear
+  bearing_line_config = white:0, green:0.65, yellow:0.8, red:1.0
+}
+
+//----------------------------------------------
+// COLREGs avoidance of the designated intruder
+//
+// Same rules, same passing sides, distances scaled to the interception.
+// A separate instance is needed because the pincer deliberately holds
+// station at trail_range (25 m) off the target: run that contact through
+// the 45 m band above and the avoidance behavior would be permanently
+// active against the very vessel BHV_Trail is trying to hold station on,
+// and the two would fight each other.
+//
+// 22 m outer keeps it silent at the 30 m station and biting the moment
+// the USV closes further; 14 m min_util_cpa_dist is the floor the
+// interception may not breach. pwt 300 -- above the trail behavior's
+// 150 -- so when it does bite, keeping clear outranks holding station.
+//
+// The margin between the station range and this outer distance is what
+// decides whether the two behaviors cooperate or fight. At 40 m station
+// against a 35 m outer distance there were only 5 m of it: any
+// overshoot chasing a manoeuvring intruder put the USV inside the
+// avoidance band, where pwt 300 beats the trail behavior's 150 and the
+// USV was pushed back off the station it had been sent to. It never
+// settled, and the wall it was supposed to form never formed. 30 vs 22
+// gives 8 m of margin at a station range where the intruder's own
+// avoidance is at full strength.
+Behavior = BHV_AvdColregsV22
+{
+  name       = avdtgt_
+  pwt        = 300
+  condition  = AVOID = true
+  condition  = MODE == ACTIVE
+  updates    = TGT_AVD_INFO
+  templating = spawn
+
+  contact           = to-be-set
+  on_no_contact_ok  = true
+  extrapolate       = true
+  decay             = 30,60
+
+  use_refinery          = true
+  can_disable           = true
+  // Publishes COLREGS_AVOID_MODE_<CONTACT> (headon/giveway/standon/
+  // overtaking/cpa) plus the geometry it was decided from, so which
+  // rule was in force at any moment is in the log, not inferred.
+  post_per_contact_info = true
+
+  pwt_outer_dist    = 22
+  pwt_inner_dist    = 14
+  completed_dist    = 60   // > alert_range (32), see the note above
+
+  // min_util_cpa_dist is where the utility of a solution reaches zero,
+  // not a hard constraint -- the helm maximises over ALL behaviors, so
+  // a strong pull from BHV_Trail can still buy a closer pass.
+  min_util_cpa_dist = 14
+  max_util_cpa_dist = 20
+
+  // Rule 14(b) defines head-on by the sidelights being in view, which
+  // is the 22.5-degree bow sector; Rule 14(c) says to ASSUME head-on
+  // when in doubt. The library default of 12 degrees is narrower than
+  // the Rule, and a near-reciprocal encounter that misses it also
+  // misses the Rule 15 crossing test (each vessel has the other on its
+  // own starboard bow, which is neither one's give-way geometry) and
+  // drops to the side-agnostic "cpa" mode. Measured here before this
+  // was raised: two USVs on reciprocal courses passed STARBOARD to
+  // starboard at 14.8 m, with the give-way-side vessel turning to port.
+  headon_abs_relbng_thresh = 22.5
+
+  pwt_grade = linear
   bearing_line_config = white:0, green:0.65, yellow:0.8, red:1.0
 }
 

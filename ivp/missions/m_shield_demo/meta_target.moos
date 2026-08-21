@@ -98,8 +98,12 @@ ProcessConfig = pContactMgrV20
   contact_max_age   = 35
   display_radii     = false
 
+  // cpa_range must be >= alert_range: CMAlert::setAlertRangeFar()
+  // clamps alert_range down to it otherwise. "alert_range=60,
+  // cpa_range=25" therefore meant the target's avoidance was not
+  // spawned until 25 m, not the 60 m the behavior below is tuned for.
   alert = id=target_avd_, var=TGT_CONTACT_INFO, val="name=$[VNAME] # contact=$[VNAME]"
-  alert = id=target_avd_, alert_range=60, cpa_range=25
+  alert = id=target_avd_, alert_range=60, cpa_range=75
 
   post_closest_range   = true
   hold_alerts_for_helm = true

@@ -57,6 +57,7 @@ ProcessConfig = pShare
   output = src_name=SEARCH_PATTERN,    route=localhost:$(MSHIP_PSHARE=9205)
   output = src_name=SENSOR_RADIUS,     route=localhost:$(MSHIP_PSHARE=9205)
 
+
   // Operator-drawn route for the intruder, straight down to the target
   // community where pTargetPathPlanner turns it into a TGT_WPT_UPDATE.
   output = src_name=TARGET_PATH_VERTEX, route=localhost:$(TARGET_PSHARE=9203)
@@ -84,7 +85,7 @@ ProcessConfig = uFldShoreBroker
 	
   qbridge  = DEPLOY, RETURN, STATION_KEEP, NODE_REPORT, NODE_MESSAGE
   qbridge  = MOOS_MANUAL_OVERRIDE, AVOID, UP_LOITER
-  qbridge  = RETURN_UPDATES, BCM_DISPLAY_RADII
+  qbridge  = RETURN_UPDATES, BCM_DISPLAY_RADII, BCM_ALERT_REQUEST
   qbridge  = CONTACT_INFO, NODE_GROUP_UPDATE
   qbridge  = BHV_ABLE_FILTER
   // Mission mode triggers (from operator or mothership coordinator)
@@ -290,31 +291,75 @@ ProcessConfig = pMarineViewer
   button_nine  = REGION:CLEAR # REGION_CLEAR = true
   button_ten   = REGION:DEFAULT # MISSION_POLY = pts={-70,-10:210,-10:210,-130:-70,-130}
 
-  // Search pattern. Re-plans and re-tasks both USVs immediately, so
-  // the patterns can be compared against each other mid-mission.
-  //   LAWN   - adjacent lanes; shortest path, tightest 180s
-  //   SKIP   - every other lane out, the missed ones back; the turns
-  //            are then two lane widths wide instead of one, which is
-  //            what actually removes the hard cornering
-  //   SPIRAL - inward rectangular spiral of the band
-  //   PERIM  - single boundary loop of the band
-  button_eleven   = PAT:LAWN   # SEARCH_PATTERN = lawnmower
-  button_twelve   = PAT:SKIP   # SEARCH_PATTERN = skip
-  button_thirteen = PAT:SPIRAL # SEARCH_PATTERN = spiral
-  button_fourteen = PAT:PERIM  # SEARCH_PATTERN = perimeter
-
-  // Sensor (visual) range. Lane spacing is 2*range less a 10% seam and
-  // the lane ends are pulled in by 0.7*range, so a longer range means
-  // fewer, shorter lanes and noticeably less distance driven. Watch the
-  // "Path Length" column in the pRegionDivider appcast change.
-  button_fifteen  = SEE:10m # SENSOR_RADIUS = 10
-  button_sixteen  = SEE:20m # SENSOR_RADIUS = 20
-  button_seventeen = SEE:30m # SENSOR_RADIUS = 30
-
   // Intruder route drawing (see left_context[target_path] above).
-  button_eighteen = TGT:UNDO  # TARGET_PATH_UNDO = true
-  button_nineteen = TGT:CLEAR # TARGET_PATH_CLEAR = true
-  button_twenty   = TGT:APPLY # TARGET_PATH_APPLY = true
+  button_eleven   = TGT:UNDO  # TARGET_PATH_UNDO = true
+  button_twelve   = TGT:CLEAR # TARGET_PATH_CLEAR = true
+  button_thirteen = TGT:APPLY # TARGET_PATH_APPLY = true
+
+  //------------------------------------------------------------------
+  // Pull-down menus (menu bar: Action)
+  //
+  // Search pattern and sensor range used to be seven buttons in a row,
+  // one per value, which is most of the button panel spent on two
+  // settings -- and the panel is capped at twenty. As pull-downs they
+  // read as what they are (one setting, several named values), the
+  // current set of patterns fits, and adding another pattern later
+  // does not cost a button.
+  //
+  // Every entry re-plans and re-tasks both USVs immediately, so the
+  // choices can be compared against each other mid-mission.
+
+  // --- Search pattern -----------------------------------------------
+  // Area sweeps:
+  //   Lawnmower - adjacent lanes; shortest path, tightest 180s
+  //   Skip Lane - every other lane out, the missed ones back; the turns
+  //               are then two lane widths wide instead of one, which
+  //               is what actually removes the hard cornering
+  //   Spiral    - inward rectangular spiral of the band
+  //   Perimeter - single boundary loop of the band
+  // Search / patrol forms:
+  //   Sector    - fan of legs from a datum at the near end of the band;
+  //               densest close in, for a known last-seen position
+  //   Barrier   - picket line down the middle of the band, shuttled end
+  //               to end; one per USV stacks into parallel barriers
+  //   Figure-8  - lemniscate crossing at the band centre; no 180s at
+  //               all, so speed is held right through every turn
+  action = SEARCH_PATTERN = lawnmower # menu_label = Search Pattern/Lawnmower (adjacent lanes)
+  action = SEARCH_PATTERN = skip      # menu_label = Search Pattern/Skip Lane (wide turns)
+  action = SEARCH_PATTERN = spiral    # menu_label = Search Pattern/Spiral (inward)
+  action+ = SEARCH_PATTERN = perimeter # menu_label = Search Pattern/Perimeter (boundary loop)
+  action = SEARCH_PATTERN = sector    # menu_label = Search Pattern/Sector Fan Search
+  action = SEARCH_PATTERN = barrier   # menu_label = Search Pattern/Barrier Patrol (picket)
+  action = SEARCH_PATTERN = figure8   # menu_label = Search Pattern/Figure-of-Eight Patrol
+
+  // --- Sensor range (one number: search plan AND detection) ---------
+  //
+  // Each entry posts two things:
+  //   SENSOR_RADIUS         -> pRegionDivider, for lane spacing (lanes
+  //                            sit 2*range apart less a 10% seam, ends
+  //                            pulled in by 0.7*range) and the coverage
+  //                            grid shading
+  //   BCM_ALERT_REQUEST_ALL -> each USV's contact manager, retuning the
+  //                            "suspect_" alert that drives detection
+  //
+  // They are deliberately the same number. A sensor that sees R metres
+  // covers a 2R swath and detects at R; splitting those into two
+  // independent controls only invited them to disagree.
+  //
+  // cpa_range is set 25% wider than alert_range so a closing contact is
+  // picked up slightly early and does not chatter at the boundary. Note
+  // it must never be SMALLER: pContactMgrV20 silently clamps
+  // alert_range down to cpa_range when it is.
+  action = SENSOR_RADIUS = 20 # BCM_ALERT_REQUEST_ALL = id=suspect_, alert_range=20, cpa_range=25 # menu_label = Sensor Range/20 m
+  action = SENSOR_RADIUS = 30 # BCM_ALERT_REQUEST_ALL = id=suspect_, alert_range=30, cpa_range=38 # menu_label = Sensor Range/30 m
+  action = SENSOR_RADIUS = 45 # BCM_ALERT_REQUEST_ALL = id=suspect_, alert_range=45, cpa_range=56 # menu_label = Sensor Range/45 m (default)
+  action = SENSOR_RADIUS = 60 # BCM_ALERT_REQUEST_ALL = id=suspect_, alert_range=60, cpa_range=75 # menu_label = Sensor Range/60 m
+  action = SENSOR_RADIUS = 80 # BCM_ALERT_REQUEST_ALL = id=suspect_, alert_range=80, cpa_range=100 # menu_label = Sensor Range/80 m
+
+  // Engagement cycle readout from pTargetCoordinator on the mothership.
+  scope = SHIELD_STATE
+  scope = SHIELD_DETECTIONS
+  scope = SHIELD_EVICTIONS
 }
 
 //--------------------------------------------------------

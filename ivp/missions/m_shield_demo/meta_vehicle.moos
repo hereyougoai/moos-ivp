@@ -102,8 +102,72 @@ ProcessConfig = pContactMgrV20
   alert_range_color = gray70
   cpa_range_color   = gray30
 
-	alert = id=avdcol_, var=CONTACT_INFO, val="name=$[VNAME] # contact=$[VNAME]"
-  alert = id=avdcol_, alert_range=15, cpa_range=5
+  // RANGES: alert_range is the range at which the avoidance behavior is
+  // SPAWNED; cpa_range is the wider range inside which a closing CPA
+  // also triggers it. cpa_range must therefore be >= alert_range --
+  // CMAlert::setAlertRangeFar() silently clamps alert_range DOWN to
+  // cpa_range when it is smaller.
+  //
+  // This block used to read "alert_range=15, cpa_range=5", which by
+  // that clamp meant the collision-avoidance behavior was not created
+  // until a contact was within FIVE METRES. Two USVs closing head-on at
+  // 2 m/s each had 1.2 seconds of it. COLREG Rule 8(a) requires action
+  // "made in ample time", and 8(b) requires the alteration to be large
+  // enough to be readily apparent -- neither is reachable from 5 m.
+  //
+  // 60 m spawn at a 4 m/s head-on closing speed is 15 seconds, which is
+  // ample time on a 280x120 m field, and leaves room for the behavior's
+  // own 45 m pwt_outer_dist to do the work.
+  alert = id=avdcol_, var=CONTACT_INFO, val="name=$[VNAME] # contact=$[VNAME]"
+  alert = id=avdcol_, alert_range=60, cpa_range=75
+  alert = id=avdcol_, ignore_name=target
+
+  // The designated intruder is handled by its own avoidance instance.
+  // It is still full COLREGs -- same rules, same passing sides -- but
+  // scaled to the interception standoff, so holding station at 25 m off
+  // the target does not sit permanently inside the avoidance band and
+  // fight BHV_Trail. The 14 m min_util_cpa_dist below is the floor the
+  // interception may not breach.
+  alert = id=avdtgt_, var=TGT_AVD_INFO, val="name=$[VNAME] # contact=$[VNAME]"
+  alert = id=avdtgt_, alert_range=32, cpa_range=45
+  alert = id=avdtgt_, match_name=target
+
+  // CONTACT-DRIVEN DETECTION.
+  //
+  // This USV's own contact manager decides whether the intruder is a
+  // contact within sensor range, and reports only the transitions --
+  // on when it comes inside, off when it drops out. pTargetCoordinator
+  // on the mothership engages on those reports.
+  //
+  // It used to be a range comparison on the mothership against the
+  // NODE_REPORT the intruder broadcasts about itself twice a second.
+  // That is ground truth handed over by the simulator; no sensor
+  // provides it, and an uncooperative vessel certainly does not. This
+  // is the seam a real sensor plugs into: replace the simulated
+  // NODE_REPORT source with radar / AIS / EO tracks and everything
+  // above the contact manager is unchanged.
+  //
+  // alert_range is the detection range and is the SAME number as the
+  // search plan's sensor radius -- the Sensor Range menu updates both,
+  // posting SENSOR_RADIUS for the planner and a BCM_ALERT_REQUEST for
+  // this alert. cpa_range is kept 25% wider so a contact that is
+  // closing is picked up slightly early and does not chatter on and
+  // off at the boundary.
+  //
+  // SEPARATOR: ':' and not '#'. pContactMgrV20 is asymmetric about it --
+  // CMAlert::addAlertOnFlag() takes the whole string as one value (the
+  // '#'-splitting version of it is sitting under an #if 0), while
+  // addAlertOffFlag() still splits on '#' and turns each piece into its
+  // own MOOS variable. Written with '#', the off transition therefore
+  // posted "SUSPECT_REPORT = vname=abe" plus two stray variables
+  // literally named "contact" and "state", so "state=off" never reached
+  // the coordinator, the contact latch never cleared, and every later
+  // entry into the search region was treated as a fresh detection.
+  alert = id=suspect_, on_flag = SUSPECT_REPORT = vname=$(VNAME):contact=$[VNAME]:state=on
+  alert = id=suspect_, off_flag = SUSPECT_REPORT = vname=$(VNAME):contact=$[VNAME]:state=off
+  alert = id=suspect_, alert_range=45, cpa_range=56
+  alert = id=suspect_, match_name=target
+
 	
 	//match_region = pts = {60,-40 : 60,-160 : 150,-160 : 180,-100 : 150,-40}
 	//match_type = kayak, uuv
