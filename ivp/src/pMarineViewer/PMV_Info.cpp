@@ -190,6 +190,13 @@ void showExampleConfigAndExit()
   blk("  action = UP_LOITER=\"speed=0\"                                ");
   blk("  action = UP_LOITER=\"speed=1.2\"                              ");
   blk("                                                                ");
+  blk("  // menu_label names the entry and its '/' builds a submenu,   ");
+  blk("  // and one click posts every var in the entry. Use it to turn ");
+  blk("  // a row of one-per-choice buttons into a pull-down of named  ");
+  blk("  // choices; without it entries are labelled VAR=value.        ");
+  blk("  action = SEARCH_PATTERN=lawnmower # menu_label=Pattern/Lawn   ");
+  blk("  action = SEARCH_PATTERN=spiral    # menu_label=Pattern/Spiral ");
+  blk("                                                                ");
   blk("  // Button Configurations                                      ");
   blk("  button_one   = DEPLOY # DEPLOY=true                           ");
   blk("  button_one   = MOOS_MANUAL_OVERRIDE=false # RETURN=false      ");

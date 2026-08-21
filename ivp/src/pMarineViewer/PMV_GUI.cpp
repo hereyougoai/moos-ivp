@@ -778,6 +778,7 @@ bool PMV_GUI::addAction(string svalue, bool separator)
 
   vector<string> vars, vals;
   string key = "";
+  string menu_label = "";
   for(i=0; i<vsize; i++) {
     string param = stripBlankEnds(biteString(svector[i], '='));
     string value = stripBlankEnds(svector[i]);
@@ -787,17 +788,49 @@ bool PMV_GUI::addAction(string svalue, bool separator)
       return(false);
     if(tolower(param)=="menu_key") 
       key = value;
+    else if(tolower(param)=="menu_label")
+      menu_label = value;
     else {
       vars.push_back(param);
       vals.push_back(value);
     }
   }
-  
+
   unsigned int psize = vars.size();
+  if(psize == 0)
+    return(false);
+
+  // With a menu_label the whole entry is ONE menu item: the label
+  // names it (and its '/' separators build the submenu path), and a
+  // click posts every var in the entry. That is what turns a wall of
+  // one-per-choice buttons into a pull-down of named choices -- the
+  // default labelling is "VAR=value", which cannot be grouped because
+  // a MOOS variable name has no place to put a submenu in it.
+  //
+  // Firing all the vars together reuses the menu_key machinery, so a
+  // private key is synthesised for the entry when the caller has not
+  // given one of their own.
+  if((menu_label != "") && (key == "")) {
+    key = "menu_label_" + uintToString(pindex);
+  }
+
   for(i=0; i<psize; i++) {
     m_action_vars.push_back(vars[i]);
     m_action_vals.push_back(vals[i]);
     m_action_keys.push_back(key);
+  }
+
+  if(menu_label != "") {
+    uintptr_t index = pindex;
+    string label = "Action/" + menu_label;
+    if(separator)
+      m_menubar->add(label.c_str(), 0, (Fl_Callback*)PMV_GUI::cb_DoAction,
+		     (void*)index, FL_MENU_DIVIDER);
+    else
+      m_menubar->add(label.c_str(), 0, (Fl_Callback*)PMV_GUI::cb_DoAction,
+		     (void*)index, 0);
+    m_menubar->redraw();
+    return(true);
   }
 
   for(i=0; i<psize; i++) {
