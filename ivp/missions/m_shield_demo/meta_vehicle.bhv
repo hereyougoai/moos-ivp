@@ -224,7 +224,24 @@ Behavior = BHV_AvdColregsV22
   // result is a contact that is permanently "complete" and never
   // avoided at all. That is exactly what happened to ben here: it sat
   // at mode=complete straight through a 17.5 m head-on pass.
-  completed_dist    = 90
+  // 300 m is longer than the field's own diagonal (~305 m of a 280x120
+  // box, and the retirement test is completed_dist*1.1 = 330), so an
+  // instance spawned for a contact is never retired for range while the
+  // mission runs.
+  //
+  // That is deliberate, and it is what makes the Action/COLREGS
+  // Avoidance menu behave like a setting rather than a suggestion. The
+  // menu tunes LIVE behavior instances; a contact whose instance had
+  // retired and later re-spawned would come back built from the numbers
+  // in THIS file, silently reverting to Moderate for that one contact
+  // while the operator believed the fleet was on Strong. With the
+  // instance permanent, the setting selected last is the setting in
+  // force, for every contact, for the rest of the run.
+  //
+  // The cost is one idle behavior per contact seen. Outside
+  // pwt_outer_dist the behavior produces no objective function at all,
+  // so an idle instance costs a range check per helm iteration.
+  completed_dist    = 300
 
   // Rule 8(d): the action must "result in passing at a safe distance".
   // The old 5 m / 10 m pair was not a safe passing distance for vessels
@@ -294,7 +311,7 @@ Behavior = BHV_AvdColregsV22
 
   pwt_outer_dist    = 22
   pwt_inner_dist    = 14
-  completed_dist    = 60   // > alert_range (32), see the note above
+  completed_dist    = 300  // > alert_range (32); permanent, see the note above
 
   // min_util_cpa_dist is where the utility of a solution reaches zero,
   // not a hard constraint -- the helm maximises over ALL behaviors, so
