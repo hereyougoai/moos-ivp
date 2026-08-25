@@ -57,6 +57,10 @@ ProcessConfig = pShare
   output = src_name=SEARCH_PATTERN,    route=localhost:$(MSHIP_PSHARE=9205)
   output = src_name=SENSOR_RADIUS,     route=localhost:$(MSHIP_PSHARE=9205)
 
+  // How far outside the region the intruder has to be pushed before the
+  // run counts as an eviction (Action/Eviction Distance menu).
+  output = src_name=EVICT_BUFFER,      route=localhost:$(MSHIP_PSHARE=9205)
+
 
   // Operator-drawn route for the intruder, straight down to the target
   // community where pTargetPathPlanner turns it into a TGT_WPT_UPDATE.
@@ -65,6 +69,22 @@ ProcessConfig = pShare
   output = src_name=TARGET_PATH_UNDO,   route=localhost:$(TARGET_PSHARE=9203)
   output = src_name=TARGET_PATH_APPLY,  route=localhost:$(TARGET_PSHARE=9203)
   output = src_name=TARGET_PATH_ROUTE,  route=localhost:$(TARGET_PSHARE=9203)
+
+  // Speed controls (Action/USV Speed and Action/Target Speed menus).
+  // Same direct-to-vehicle pattern as the route above, straight past
+  // the mothership: each is a PARTIAL update on a variable that already
+  // has another source posting to it (WPT_UPDATE from pRegionDivider's
+  // lane assignments, BLOCK_UPDATE from pTargetCoordinator's station
+  // points, TGT_WPT_UPDATE from the operator-drawn route above), and
+  // only ever names the one field it sets -- speed, or transit_speed --
+  // so it does not disturb whatever the other source is doing with
+  // theirs. See BHV_Waypoint (survey_region), BHV_StationKeep
+  // (block_station) and BHV_Waypoint (target_patrol) in the .bhv files.
+  output = src_name=USV_CRUISE_SPD, dest_name=WPT_UPDATE,   route=localhost:$(USV1_PSHARE=9201)
+  output = src_name=USV_CRUISE_SPD, dest_name=WPT_UPDATE,   route=localhost:$(USV2_PSHARE=9202)
+  output = src_name=USV_XSPD,       dest_name=BLOCK_UPDATE, route=localhost:$(USV1_PSHARE=9201)
+  output = src_name=USV_XSPD,       dest_name=BLOCK_UPDATE, route=localhost:$(USV2_PSHARE=9202)
+  output = src_name=TGT_SPD_UPDATE, dest_name=TGT_WPT_UPDATE, route=localhost:$(TARGET_PSHARE=9203)
 }
 
 #include plugs.moos <uProcessWatch>
@@ -88,12 +108,6 @@ ProcessConfig = uFldShoreBroker
   qbridge  = RETURN_UPDATES, BCM_DISPLAY_RADII, BCM_ALERT_REQUEST
   qbridge  = CONTACT_INFO, NODE_GROUP_UPDATE
   qbridge  = BHV_ABLE_FILTER
-  // COLREGS avoidance strength (Action/COLREGS Avoidance menu). Both
-  // avoidance behaviors are dynamically spawned templates, so the
-  // strength is delivered on the SAME variable the contact manager
-  // spawns them with -- a nameless update string on that variable is
-  // applied by the helm to every live instance of the template.
-  qbridge  = TGT_AVD_INFO, COLREGS_LEVEL
   // Mission mode triggers (from operator or mothership coordinator)
   qbridge  = SURVEY, TARGET_ALERT, LOITER, SHORE_HEARTBEAT
   qbridge  = WPT_UPDATE, TRAIL_UPDATE, SUSPECT_TARGET
@@ -362,74 +376,72 @@ ProcessConfig = pMarineViewer
   action = SENSOR_RADIUS = 60 # BCM_ALERT_REQUEST_ALL = id=suspect_, alert_range=60, cpa_range=75 # menu_label = Sensor Range/60 m
   action = SENSOR_RADIUS = 80 # BCM_ALERT_REQUEST_ALL = id=suspect_, alert_range=80, cpa_range=100 # menu_label = Sensor Range/80 m
 
-  // --- COLREGS avoidance strength ------------------------------------
+  // --- Eviction distance --------------------------------------------
   //
-  // Four named settings of how hard the USVs work to keep clear:
-  //   Strong   (å¼·) - act early, pass wide
-  //   Moderate (ä¸­) - the tuned mission default
-  //   Weak     (å¼±) - act late, pass close
-  //   Minimal  (ç¡) - a last-ditch few metres only
+  // How far clear of the region boundary the intruder has to be driven
+  // before the engagement is scored a success and the pair turns back
+  // into its search pattern. One number, EVICT_BUFFER, read by
+  // pTargetCoordinator on the mothership (region_exit_buffer).
   //
-  // WHAT IS ACTUALLY BEING TUNED. The two BHV_AvdColregsV22 instances in
-  // the .bhv file ARE the international collision-regulation logic --
-  // the encounter is classified (head-on / give-way / stand-on /
-  // overtaking) and a different objective function per class expresses
-  // Rules 13-17. None of that is switched off or bypassed here. What
-  // these settings move are the three numbers that decide how the same
-  // rules are APPLIED, which is exactly what the Rules leave to the
-  // mariner:
+  // It is measured from the boundary outward, and it is held for
+  // release_hold (8 s) before it counts -- a target weaving along the
+  // edge under pressure crosses out and back several times before it
+  // actually leaves.
   //
-  //   pwt_outer_dist / pwt_inner_dist   Rule 8(a), "in ample time":
-  //       how far out the avoidance behavior starts to carry weight,
-  //       and where it reaches full weight. Bigger = earlier action.
-  //   min_util_cpa_dist / max_util_cpa_dist   Rule 8(d), "passing at a
-  //       safe distance": the CPA below which a solution is worthless
-  //       and the CPA at which it is perfect. Bigger = wider berth.
-  //   headon_abs_relbng_thresh   Rule 14(b)/(c): the half-angle of the
-  //       bow sector that counts as head-on, and therefore how readily
-  //       a near-reciprocal encounter is resolved as "both turn to
-  //       starboard" rather than falling through to the side-agnostic
-  //       CPA mode. Bigger = more of Rule 14(c)'s "if in doubt, assume".
-  //
-  // HOW IT IS DELIVERED. Both behaviors are spawned templates, one
-  // instance per contact. An update string that contains NO "name="
-  // field is not a spawn request, so pHelmIvP applies it to every live
-  // instance of that template at once -- which is why the settings are
-  // posted on CONTACT_INFO / TGT_AVD_INFO, the same variables the
-  // contact manager spawns on, and carry no name.
-  //
-  // ORDER MATTERS inside each string: pwt_inner_dist/pwt_outer_dist and
-  // min_util_cpa_dist/max_util_cpa_dist are a min/max pair, and setting
-  // either end drags the other along if the pair would be inverted.
-  // Setting the inner/min end first is the order that survives both a
-  // step up and a step down; the reverse order would clamp on the way up.
-  //
-  // Two instances are tuned separately. avdcol_ is the fleet's mutual
-  // avoidance and can be scaled freely. avdtgt_ avoids the intruder the
-  // pincer is deliberately holding station on at 25 m, so even the
-  // Strong setting keeps max_util_cpa_dist below that station range --
-  // above it, avoidance (pwt 300) would outrank BHV_Trail (pwt 150) at
-  // the station itself and push the USVs off the wall they are there to
-  // form. See the margin note in the .bhv file.
+  // It also sets how far out the boundary wall keeps standing: the
+  // whole of this band is water the intruder must not be allowed to
+  // turn back through, so the barrier holds across it (see wall_dist in
+  // the mothership config). Pushing the number up therefore buys a
+  // deeper eviction AND a wall that escorts the target further out --
+  // at the cost of a longer engagement per intrusion.
+  action = EVICT_BUFFER = 5  # menu_label = Eviction Distance/5 m - just over the line
+  action = EVICT_BUFFER = 15 # menu_label = Eviction Distance/15 m (default)
+  action = EVICT_BUFFER = 30 # menu_label = Eviction Distance/30 m
+  action = EVICT_BUFFER = 50 # menu_label = Eviction Distance/50 m
+  action = EVICT_BUFFER = 80 # menu_label = Eviction Distance/80 m - escort well clear
 
-  action = COLREGS_LEVEL_ALL = strong # AVOID_ALL = true # CONTACT_INFO_ALL = "pwt_inner_dist=28 # pwt_outer_dist=60 # min_util_cpa_dist=18 # max_util_cpa_dist=30 # headon_abs_relbng_thresh=30" # TGT_AVD_INFO_ALL = "pwt_inner_dist=16 # pwt_outer_dist=28 # min_util_cpa_dist=16 # max_util_cpa_dist=24 # headon_abs_relbng_thresh=30" # menu_label = COLREGS Avoidance/Strong - act early, pass wide
+  // --- USV Speed -------------------------------------------------------
+  //
+  // One dial, two behaviors: the patrol/search cruise speed
+  // (survey_region's BHV_Waypoint) and the transit speed to a blocking
+  // station (block_station's BHV_StationKeep, only meaningful in
+  // pincer_mode=block) are set to the SAME number, so "USV Speed = X"
+  // means X in both phases of the mission rather than two dials that
+  // could be left mismatched. herd mode has no separate dial: BHV_Trail
+  // matches the contact's own speed once on station by design (that is
+  // why it does not evict -- see the pincer_mode note above), so there
+  // is no USV transit speed for this menu to set there.
+  //
+  // 3.0 m/s is the launch-script default transit_speed for the block
+  // station; 1.4 m/s is the launch-script default STOCK_SPD for search.
+  action = USV_CRUISE_SPD = "speed=1.0" # USV_XSPD = "transit_speed=1.0" # menu_label = USV Speed/1.0 m/s - slow
+  action = USV_CRUISE_SPD = "speed=1.4" # USV_XSPD = "transit_speed=1.4" # menu_label = USV Speed/1.4 m/s (default)
+  action = USV_CRUISE_SPD = "speed=2.0" # USV_XSPD = "transit_speed=2.0" # menu_label = USV Speed/2.0 m/s
+  action = USV_CRUISE_SPD = "speed=3.0" # USV_XSPD = "transit_speed=3.0" # menu_label = USV Speed/3.0 m/s - fast (block default)
+  action = USV_CRUISE_SPD = "speed=4.0" # USV_XSPD = "transit_speed=4.0" # menu_label = USV Speed/4.0 m/s - very fast
 
-  action = COLREGS_LEVEL_ALL = moderate # AVOID_ALL = true # CONTACT_INFO_ALL = "pwt_inner_dist=20 # pwt_outer_dist=45 # min_util_cpa_dist=12 # max_util_cpa_dist=20 # headon_abs_relbng_thresh=22.5" # TGT_AVD_INFO_ALL = "pwt_inner_dist=14 # pwt_outer_dist=22 # min_util_cpa_dist=14 # max_util_cpa_dist=20 # headon_abs_relbng_thresh=22.5" # menu_label = COLREGS Avoidance/Moderate - mission default
-
-  action = COLREGS_LEVEL_ALL = weak # AVOID_ALL = true # CONTACT_INFO_ALL = "pwt_inner_dist=10 # pwt_outer_dist=25 # min_util_cpa_dist=6 # max_util_cpa_dist=12 # headon_abs_relbng_thresh=15" # TGT_AVD_INFO_ALL = "pwt_inner_dist=8 # pwt_outer_dist=14 # min_util_cpa_dist=7 # max_util_cpa_dist=12 # headon_abs_relbng_thresh=15" # menu_label = COLREGS Avoidance/Weak - act late, pass close
-
-  // "Minimal" is not AVOID=false. Switching the behaviors off entirely
-  // leaves nothing between two hulls closing at 4 m/s, and the run ends
-  // in a collision rather than in a demonstration. This keeps a
-  // few-metres last-ditch band: at these speeds an 8 m outer distance is
-  // about two seconds of warning, so the rules are effectively not being
-  // followed -- which is the point of the setting -- without staging a
-  // guaranteed contact.
-  action = COLREGS_LEVEL_ALL = minimal # AVOID_ALL = true # CONTACT_INFO_ALL = "pwt_inner_dist=3 # pwt_outer_dist=8 # min_util_cpa_dist=2 # max_util_cpa_dist=4 # headon_abs_relbng_thresh=12" # TGT_AVD_INFO_ALL = "pwt_inner_dist=3 # pwt_outer_dist=6 # min_util_cpa_dist=2 # max_util_cpa_dist=4 # headon_abs_relbng_thresh=12" # menu_label = COLREGS Avoidance/Minimal - last-ditch only
-
-  scope = COLREGS_LEVEL_ALL
+  // --- Target Speed ------------------------------------------------------
+  //
+  // The intruder's patrol speed. Spans below, at, and above the USV
+  // Speed choices above on purpose: the interception geometry (see
+  // feasibleLead()/blockTransitHold() in TargetCoordinator.cpp) depends
+  // on the USV being able to out-position the intruder, and that
+  // assumption only holds while the intruder is slower. This menu is
+  // what lets an operator actually set up the same-speed and
+  // faster-than-us cases to see where the tactic holds and where it
+  // breaks down, instead of hand-editing TGT_SPD in the mission file
+  // and relaunching. 0.8 m/s is the launch-script default (TGT_SPD).
+  action = TGT_SPD_UPDATE = "speed=0.5" # menu_label = Target Speed/0.5 m/s - slow
+  action = TGT_SPD_UPDATE = "speed=0.8" # menu_label = Target Speed/0.8 m/s (default)
+  action = TGT_SPD_UPDATE = "speed=1.4" # menu_label = Target Speed/1.4 m/s - matches USV default
+  action = TGT_SPD_UPDATE = "speed=2.0" # menu_label = Target Speed/2.0 m/s - same speed as a fast USV
+  action = TGT_SPD_UPDATE = "speed=3.0" # menu_label = Target Speed/3.0 m/s - faster than any USV setting
 
   // Engagement cycle readout from pTargetCoordinator on the mothership.
+  scope = EVICT_BUFFER
+  scope = USV_CRUISE_SPD
+  scope = USV_XSPD
+  scope = TGT_SPD_UPDATE
   scope = SHIELD_STATE
   scope = SHIELD_DETECTIONS
   scope = SHIELD_EVICTIONS

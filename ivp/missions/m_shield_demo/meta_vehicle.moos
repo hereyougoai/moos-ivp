@@ -111,9 +111,8 @@ ProcessConfig = pContactMgrV20
   // This block used to read "alert_range=15, cpa_range=5", which by
   // that clamp meant the collision-avoidance behavior was not created
   // until a contact was within FIVE METRES. Two USVs closing head-on at
-  // 2 m/s each had 1.2 seconds of it. COLREG Rule 8(a) requires action
-  // "made in ample time", and 8(b) requires the alteration to be large
-  // enough to be readily apparent -- neither is reachable from 5 m.
+  // 2 m/s each had 1.2 seconds of it. Action that early enough to be
+  // a single readily-apparent alteration is not reachable from 5 m.
   //
   // 60 m spawn at a 4 m/s head-on closing speed is 15 seconds, which is
   // ample time on a 280x120 m field, and leaves room for the behavior's
@@ -123,7 +122,7 @@ ProcessConfig = pContactMgrV20
   alert = id=avdcol_, ignore_name=target
 
   // The designated intruder is handled by its own avoidance instance.
-  // It is still full COLREGs -- same rules, same passing sides -- but
+  // Same CPA metric as the fleet instance above, but the distances are
   // scaled to the interception standoff, so holding station at 25 m off
   // the target does not sit permanently inside the avoidance band and
   // fight BHV_Trail. The 14 m min_util_cpa_dist below is the floor the

@@ -32,3 +32,6 @@ ivp/missions/*/*++
 ivp/missions/*/*~+
 *#
 mis
+__pycache__/
+*.pyc
+ivp/missions/*/bench_results/

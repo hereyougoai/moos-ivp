@@ -53,27 +53,25 @@ Behavior = BHV_Waypoint
 // this 55 m outer distance, so the pressure is continuous rather than
 // a single dodge.
 //
-// NOTE ON COLREGS. This vessel deliberately does NOT run the COLREGs
-// behavior the USVs run, and that is a modelling decision rather than
-// an oversight.
+// The whole mission -- this vessel and the USVs alike -- runs plain
+// CPA-based avoidance rather than a rule-based give-way/stand-on
+// behavior, and that is a modelling decision rather than an oversight.
 //
-// It was tried. BHV_AvdColregsV22 here makes the intruder a compliant
-// vessel, and a compliant vessel does not flee: under Rule 17(a)(i) it
-// is the STAND-ON vessel against whichever USV is on its port side and
-// must hold its course and speed. Half the pincer therefore stopped
-// producing any pressure at all, and the give-way turn it owed the
-// other USV was decided by COLREGs geometry rather than by where the
-// fleet wanted it to go -- frequently back toward the region centre.
-// Combined with the arc-rotation bug this is what made evictions take
-// several laps of the centre instead of heading for the boundary.
+// The rule-based variant was tried here and it makes the intruder a
+// compliant vessel, and a compliant vessel does not flee: as the
+// stand-on vessel against whichever USV is on its port side it must
+// hold course and speed. Half the pincer therefore stopped producing
+// any pressure at all, and the give-way turn it owed the other USV was
+// decided by encounter geometry rather than by where the fleet wanted
+// it to go -- frequently back toward the region centre. Combined with
+// the arc-rotation bug this is what made evictions take several laps of
+// the centre instead of heading for the boundary.
 //
 // The scenario is an uncooperative intruder being driven out of an
 // area. Modelling it as a vessel that scrupulously stands on is the
-// wrong model, and it is not what COLREGs compliance means for this
-// mission: the Rules govern the conduct of OUR vessels, and abe and ben
-// remain fully COLREGs-driven -- toward this contact and toward each
-// other. What this behavior provides is a realistic evasive response,
-// which is exactly what the herding is supposed to work against.
+// wrong model. What this behavior provides is a realistic evasive
+// response, which is exactly what the herding is supposed to work
+// against.
 Behavior = BHV_AvoidCollision
 {
   name       = target_avd_

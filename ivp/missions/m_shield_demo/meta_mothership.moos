@@ -57,6 +57,15 @@ ProcessConfig = pShare
   output = src_name=WPT_UPDATE_BEN,     dest_name=WPT_UPDATE,     route=localhost:$(USV2_PSHARE=9202)
   output = src_name=TRAIL_UPDATE_ABE,   dest_name=TRAIL_UPDATE,   route=localhost:$(USV1_PSHARE=9201)
   output = src_name=TRAIL_UPDATE_BEN,   dest_name=TRAIL_UPDATE,   route=localhost:$(USV2_PSHARE=9202)
+
+  // Blocking stations (pincer_mode=block). BLOCK_UPDATE carries the
+  // ground-fixed point; BLOCK_ACTIVE is the switch the station-keeping
+  // behavior is conditioned on, and it also disables BHV_Trail so the
+  // two never fight over the same vehicle.
+  output = src_name=BLOCK_UPDATE_ABE,   dest_name=BLOCK_UPDATE,   route=localhost:$(USV1_PSHARE=9201)
+  output = src_name=BLOCK_UPDATE_BEN,   dest_name=BLOCK_UPDATE,   route=localhost:$(USV2_PSHARE=9202)
+  output = src_name=BLOCK_ACTIVE_ABE,   dest_name=BLOCK_ACTIVE,   route=localhost:$(USV1_PSHARE=9201)
+  output = src_name=BLOCK_ACTIVE_BEN,   dest_name=BLOCK_ACTIVE,   route=localhost:$(USV2_PSHARE=9202)
   output = src_name=SUSPECT_TARGET_ALL, dest_name=SUSPECT_TARGET, route=localhost:$(USV1_PSHARE=9201)
   output = src_name=SUSPECT_TARGET_ALL, dest_name=SUSPECT_TARGET, route=localhost:$(USV2_PSHARE=9202)
 
@@ -181,7 +190,17 @@ ProcessConfig = pTargetCoordinator
   vnames      = $(VNAMES)
   target_name = target
 
-  pincer_mode = herd   // or "stern" for the old astern-fan behavior
+  // block = ground-fixed blocking stations ahead of the intruder, the
+  //         only geometry that actually makes it turn. See the long
+  //         note in assignAndPostBlock() and the block_* settings at
+  //         the end of this block.
+  // herd  = the old trail arc: two USVs holding an absolute bearing off
+  //         the intruder at trail_range. Kept for comparison. It does
+  //         not evict -- BHV_Trail matches the contact's velocity once
+  //         on station, so the intruder's avoidance sees a flat
+  //         objective function and never turns.
+  // stern = the older astern fan.
+  pincer_mode = herd
 
   // 120 deg apart on the inboard arc: the two USVs sit roughly on the
   // target's beams rather than in a queue behind it, which is what
@@ -192,7 +211,7 @@ ProcessConfig = pTargetCoordinator
   // The station has to satisfy two things at once: close enough to be
   // inside the intruder's own avoidance band (pwt_outer_dist 55) so the
   // pressure is continuous rather than a single dodge, and far enough
-  // out that it is NOT inside the USV's own COLREGs avoidance of the
+  // out that it is NOT inside the USV's own avoidance band for the
   // intruder (pwt_outer_dist 30) -- otherwise the two behaviors fight
   // and the pass ends up closer than either asked for.
   //
@@ -260,6 +279,8 @@ ProcessConfig = pTargetCoordinator
   // makes it a driven-off judgement rather than a reading of one noisy
   // instant -- a target weaving along the boundary under pressure
   // crosses out and back several times before it actually leaves.
+  // The operator can change this mid-run from the shoreside
+  // Action/Eviction Distance menu, which posts EVICT_BUFFER.
   region_exit_buffer = 15
   release_hold       = 8
 
@@ -274,7 +295,7 @@ ProcessConfig = pTargetCoordinator
   operator_release  = true
 
   //---------------------------------------------------------------
-  // COLREGs: leave the intruder a compliant way out.
+  // Leave the intruder a way out.
   //
   // The sea room Rule 8(f) asks for is already there by construction:
   // stations occupy only spread_deg (120) of arc centred on the inboard
@@ -291,7 +312,10 @@ ProcessConfig = pTargetCoordinator
   //
   // All that is left to guard is parking a USV bow-on in front of it,
   // and that is a small nudge, not a wholesale rotation.
-  bow_guard_deg = 20
+  // 0 = OFF. The bow guard is one of the two places the pincer looks at
+  // the intruder's heading; both are disabled for the heading-free
+  // experiment. Restore to 20 to put it back.
+  bow_guard_deg = 0
 
   //---------------------------------------------------------------
   // Which way to push it out.
@@ -300,23 +324,263 @@ ProcessConfig = pTargetCoordinator
   // bearing, so the USVs sit on the side the intruder is being pushed
   // away from and the open water is the way out.
   //
-  // The exit bearing is picked by casting a ray from the intruder to
-  // the region boundary on each of 36 bearings and scoring
+  // The exit bearing is picked by scoring each of 36 bearings on
   //
-  //     cost = (distance to the boundary along that bearing)
+  //     cost = (metres the intruder must still travel along that
+  //             bearing to be region_exit_buffer clear of the area)
   //          + heading_bias * (degrees off the intruder's own head)
   //
-  // Distance alone picks the nearest way out, which on a 280x120 m
-  // region often means demanding the intruder reverse course -- it
-  // resists, and the engagement turns into laps of the centre. At
-  // 2 m/deg a 90-degree turn is charged 180 m, so an exit aligned with
-  // where it is already going wins unless it is very much longer. The
-  // fleet works with the intruder's momentum instead of against it.
+  // heading_bias is the price, in metres of detour, the fleet will pay
+  // to avoid asking the intruder for a turn. Distance alone always
+  // picks the nearest way out, but on a 280x120 m region that usually
+  // means demanding a full reversal; the intruder resists and the
+  // engagement drags. The bias buys momentum back at a stated price.
+  //
+  // 0.35 is a DELIBERATELY CHEAP price: a 90-degree turn is worth 31 m
+  // of detour, a full reversal 63 m -- about half the width of the
+  // field. Measured over eight starting geometries on the default
+  // region, this picks an exit averaging 3 m longer than the nearest
+  // one available.
+  //
+  // It used to be 2.0, which is 180 m for a 90-degree turn on a field
+  // only 120 m across -- so the geometry could never outvote the
+  // heading, and an intruder sitting 10 m inside the NORTH edge but
+  // pointing south was escorted 125 m across the whole region to be
+  // pushed out the SOUTH edge, right past the pair, instead of the
+  // 25 m out of the edge it was already touching. Same at 1.0. The
+  // behaviour changes between 0.5 and 0.35: at 0.5 an intruder in the
+  // southern half heading north is still walked 105 m to the north
+  // edge; at 0.35 it is turned round and pushed out the 48 m way.
+  //
+  // Going all the way to 0 is worse, not better: it asks for a 152
+  // degree turn on average, which is a head-on push in almost every
+  // engagement.
+  //
+  // Note this only decides the exit the run STARTS on -- exit_commit
+  // below then latches it.
   //
   // exit_margin is hysteresis: a new bearing has to beat the one we are
   // committed to by this much cost before the wall is re-anchored. A
   // wall that swings as the intruder yaws does not push.
-  heading_bias = 2.0
+  // 0 = OFF, and this is the OTHER place the pincer looks at the
+  // intruder's heading. At zero the exit bearing is decided by the
+  // geometry alone -- the shortest way out of the area from where it is
+  // standing -- and the blocking arc, which is anchored to the
+  // reciprocal of that, stops moving when the intruder turns. Restore to
+  // 0.35 to put it back.
+  heading_bias = 0
   exit_margin  = 15
+
+  // ...and exit_commit is the rest of that hysteresis, in seconds.
+  //
+  // exit_margin alone was not enough. The distance term is "how far the
+  // intruder still has to travel to be clear of the area by the
+  // eviction distance", and near the boundary that number is small on
+  // EVERY outward bearing -- so the cost there is almost pure heading,
+  // and 15 m of margin is only 7.5 degrees of it at the default bias.
+  // The intruder's own yaw covers that. Result: it reached the edge,
+  // turned hard along it, dragged the exit bearing round with it, and
+  // the arc -- anchored to the reciprocal -- swung off the water it had
+  // just been pushed out of. It turned again and went back in.
+  //
+  // So the exit is LATCHED when the engagement starts and a rival
+  // bearing has to hold its advantage for exit_commit seconds before it
+  // takes over. That is something the intruder cannot fake by yawing:
+  // it would have to actually hold the new course. Pick a lane, push it
+  // out that lane.
+  //
+  // 0 restores the old behavior (re-anchor as soon as the margin is
+  // cleared).
+  exit_commit  = 5
+
+  // The flanks are frozen the same way, and for the same reason: a
+  // mid-run swap means both USVs leave station and cross the intruder's
+  // track to change places, and for the seconds that takes there is no
+  // wall at all. The pairing is taken once, when the engagement starts,
+  // from the flank each USV is already on. swap_margin_deg still
+  // applies to the pairing taken BEFORE the engagement.
+  swap_lock    = true
+
+  //---------------------------------------------------------------
+  // Blocking stations (pincer_mode = block)
+  //
+  // THE MECHANISM. The intruder is driven off by its own collision
+  // avoidance, and that behavior scores every candidate course and
+  // speed by PROJECTED CPA: no utility below 12 m, full utility above
+  // 25 m. Two things follow, and the old trail arc got both wrong.
+  //
+  // First, a station further than 25 m off the intruder's TRACK is
+  // invisible to it -- not weak, invisible, because "perfect" is the
+  // score every solution already gets.
+  //
+  // Second, and this is the one that mattered: a projected CPA needs
+  // relative velocity to exist. BHV_Trail steers the USV at the
+  // contact's own course and speed once it is on station, so the pair
+  // moves as one, the CPA equals the present range for every manoeuvre
+  // the intruder could make, and its avoidance function is FLAT. A flat
+  // function contributes nothing to the helm's solution whatever weight
+  // it carries. Swept over the intruder's whole manoeuvre space, the
+  // best escape it could find beat holding course by 0.0 at every trail
+  // range from 30 m down to 14 m. That is why the pair looked like it
+  // was escorting the target around the field rather than evicting it.
+  //
+  // So the station is a GROUND-FIXED point, ahead of the intruder and
+  // just off its track. It does not move with the intruder, so there is
+  // relative velocity, so there is a CPA, so there is a gradient: at
+  // 50 m lead and 18 m offset, carrying on scores 59.6 against 100 for
+  // turning away.
+
+  // How far ahead the blocker stands. Far enough that the intruder has
+  // time to see the geometry and turn once (Rule 8b, a substantial
+  // alteration rather than a succession of small late ones): 50 m at
+  // its 0.8 m/s is about a minute. It is also what keeps the STRAIGHT
+  // LINE range to the intruder near 53 m -- far outside the 22 m band
+  // where our own avoidance of it would start fighting the station.
+  block_lead   = 50
+
+  // The lateral offset from the intruder's track. THIS IS THE SAFETY
+  // DISTANCE: it is what the intruder passes at if it ignores us
+  // completely. This is now a CEILING, not the number stood at -- see
+  // block_reaction_* below. 18 m happens to be a good starting guess
+  // for a target with this simulator's avoidance config, but nothing
+  // here should assume that config is known. Floored at
+  // block_min_offset. If the intruder presses on anyway, avdtgt_ (pwt
+  // 300) outranks the station-keeping behavior (pwt 200) and the USV
+  // gives way -- the block is a position, not a refusal to keep clear.
+  block_offset = 18
+
+  // ADAPTIVE OFFSET. block_offset above is only where a fresh
+  // engagement STARTS. A hard-coded number that happens to sit inside
+  // this simulated target's reaction band tells us nothing about a
+  // contact of unknown type -- different avoidance model, a human on
+  // the helm, or none at all -- so instead of assuming the band, the
+  // coordinator finds it: hold the current offset for
+  // block_reaction_wait seconds and watch the intruder's own heading.
+  // If it turns away from the block side by block_reaction_deg or more,
+  // the offset is working and is frozen for the rest of the engagement.
+  // If nothing happens in that window, shave block_shrink_step off it
+  // and try again, no lower than block_min_offset. See
+  // updateAdaptiveOffset() in TargetCoordinator.cpp.
+  block_reaction_wait = 6
+  block_reaction_deg  = 8
+  block_shrink_step   = 3
+
+  // Hard floor. 14 m is avdtgt_'s min_util_cpa_dist, the CPA our own
+  // avoidance behavior calls the floor of a safe pass, and 2 m above the
+  // 12 m the intruder's own behavior treats as a collision. A smaller
+  // number here would be staging one.
+  block_min_offset = 14
+
+  // The second USV stands this much further out on the same side, and
+  // at block_lead2 of the lead. It does not threaten the present track
+  // -- 52 m off it is beyond the intruder's reaction distance, by
+  // design -- and is not meant to. Its job is to be already there if
+  // the intruder tries to turn back the way we do not want it to go.
+  block_span   = 34
+  block_lead2  = 0.6
+
+  // When the intruder is already heading within this of the exit
+  // bearing there is nothing to correct, and blocking the bow of a
+  // vessel that is leaving would only turn it back in. The pair splits
+  // into a funnel instead: one either side, both wide enough to leave
+  // the lane ahead open.
+  block_dead_deg = 15
+
+  // How long a side flip has to be wanted, continuously, before it is
+  // taken -- the same latch idea as the exit bearing above, applied to
+  // WHICH SIDE the pair blocks from. Without this, a target weaving (or
+  // just yawing under its own COLREGs avoidance) across the exit
+  // bearing flips block_side every time it crosses, and each flip threw
+  // away whatever the formation had built up on the old side: the run
+  // looked like repeated failed attempts from alternating directions
+  // instead of one sustained push.
+  block_side_commit = 4
+
+  // RE-ISSUING THE POINT. A station recomputed every iteration would
+  // translate with the intruder, the USV would chase it at the
+  // intruder's own speed, and the relative velocity -- the whole source
+  // of the pressure -- would be zero again. So a point is held until it
+  // is spent, and only then is a new one dropped in front of where the
+  // intruder is going now:
+  //
+  //   block_slack     the point stops biting once the intruder's turn
+  //                   has carried its track this far from it. Just
+  //                   under the 25 m at which the intruder stops
+  //                   reacting, so the replacement is issued at the
+  //                   moment the old one goes quiet, not before.
+  //   block_min_lead  and it is spent once the intruder is level with
+  //                   it: a station abeam or astern blocks nothing.
+  //   block_interval  floor on how often a new one may be issued, so a
+  //                   yawing intruder cannot make us drag the station
+  //                   along behind it.
+  block_slack    = 22
+  block_min_lead = 25
+  block_interval = 5
+
+  // TRANSIT FEASIBILITY -- the one that actually decides whether an
+  // eviction succeeds or keeps restarting from another direction.
+  //
+  // Measured over two untouched 900 s benchmark runs (bench.sh/bench.py,
+  // giveway excluded, genuine re-anchors only):
+  //
+  //     station lifetime      median  7 - 14 s
+  //     transit time NEEDED   median 23 - 39 s
+  //     stations ever reached        30 - 37 %
+  //     median closest approach      17 - 35 m
+  //
+  // The fleet was being ordered to points it could not physically
+  // occupy. Every time the intruder yawed enough to move its track, the
+  // order was torn up and replaced -- throwing away the ten or fifteen
+  // seconds of transit already spent and starting a fresh thirty-second
+  // journey somewhere else. The re-anchor cadence was set by how fast
+  // the INTRUDER manoeuvres; it has to be set by how fast OUR OWN
+  // vehicles move, because that is what bounds how often the fleet can
+  // usefully change its mind.
+  //
+  //   block_commit_transit  hold an off-track point while the USV
+  //                         assigned to it is still closing and inside
+  //                         its transit estimate. A point the intruder
+  //                         has already drawn level with is retired
+  //                         regardless -- that one is beyond rescue.
+  //   block_transit_frac    multiplier on the straight-line estimate.
+  //   block_transit_cap     absolute ceiling, so an unreachable point
+  //                         cannot be held forever.
+  //   block_feasible        walk the lead down from block_lead until
+  //                         the blocker can reach the station before
+  //                         the intruder draws level with it.
+  //   block_usv_speed       fallback when a node report carries none.
+  block_commit_transit = true
+  block_transit_frac   = 1.0
+  block_transit_cap    = 40
+  block_feasible       = true
+  block_usv_speed      = 2.0
+
+  // GIVING WAY. block_offset is the distance the intruder passes at
+  // while it keeps to the track we measured it on. An intruder that
+  // turns INTO the station instead closes on a vehicle that is, by
+  // design, sitting still, and the two behaviors sharing that vehicle's
+  // helm -- station keeping at pwt 200, avdtgt_ at 300 -- split the
+  // solution between them rather than one winning outright. Measured
+  // before this rule existed: 8.1 m at the worst and 29 seconds of a
+  // 20-minute run inside 14 m.
+  //
+  // So the coordinator gives way itself, at a range it picks, instead
+  // of leaving it to that contest. Inside block_abort the station is
+  // replaced by a point directly away from the intruder and the USV
+  // turns out; blocking resumes past block_abort + block_rearm with a
+  // fresh point in front of wherever the intruder is going by then.
+  //
+  // 18 m is the same number as block_offset: we never come closer than
+  // the distance the block was promising in the first place.
+  // 25 rather than 18, because giving way is not instant: the USV can
+  // be transiting toward its station at 3 m/s while the intruder closes
+  // at 0.8, and at 18 m it overshot to 10.8 m before the turn took
+  // effect. Starting the turn at 25 m absorbs that. It costs nothing:
+  // the block does its work through the intruder's PROJECTED CPA, from
+  // 50 m ahead, long before the two are 25 m apart -- if it has not
+  // turned by then the block has already failed and yielding is the
+  // right answer anyway.
+  block_abort = 25
+  block_rearm = 10
 }
 
