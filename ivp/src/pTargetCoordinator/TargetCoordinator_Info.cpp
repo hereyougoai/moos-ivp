@@ -116,6 +116,7 @@ void showExampleConfigAndExit()
   blk("  release_scale      = 1.5                                      ");
   blk("  release_hold       = 8      // secs clear before it counts    ");
   blk("  region_exit_buffer = 15     // metres outside the region      ");
+  blk("                              //   (live: EVICT_BUFFER)         ");
   blk("  reengage_delay     = 10     // deaf period after a success    ");
   blk("  alert_var          = TARGET_ALERT_AUTO                        ");
   blk("  survey_var         = SURVEY_AUTO                              ");
@@ -141,6 +142,24 @@ void showExampleConfigAndExit()
   blk("                              // one does: by the target being    ");
   blk("                              // driven off. false makes the      ");
   blk("                              // button a latch only SURVEY frees ");
+  blk("                                                                ");
+  blk("  // Which way the intruder is pushed out, and how firmly that  ");
+  blk("  // choice is held once the engagement is running.             ");
+  blk("  heading_bias       = 0.35   // metres of detour the fleet will ");
+  blk("                              // pay per degree of turn asked of ");
+  blk("                              // the intruder. Small = push it   ");
+  blk("                              // out the nearest side; large =   ");
+  blk("                              // out the way it is already going ");
+  blk("  exit_margin        = 15     // metres of cost a rival bearing  ");
+  blk("                              // must beat the current one by    ");
+  blk("  exit_commit        = 5      // ...and seconds it must hold that");
+  blk("                              // advantage before the arc is     ");
+  blk("                              // re-anchored. 0 = re-anchor as   ");
+  blk("                              // soon as the margin is cleared.  ");
+  blk("  swap_lock          = true   // freeze the flank pairing for the");
+  blk("                              // duration of an engagement; a    ");
+  blk("                              // mid-run swap means both USVs    ");
+  blk("                              // leave station to change places. ");
   blk("}                                                               ");
   exit(0);
 }
@@ -165,6 +184,8 @@ void showInterfaceAndExit()
   blk("  SENSOR_RADIUS     = 20          (search-plan sensor footprint)");
   blk("  DETECT_RADIUS     = 60          (engagement range; wins over    ");
   blk("                                   sensor_radius when set)        ");
+  blk("  EVICT_BUFFER      = 30          (metres clear of the region   ");
+  blk("                                   that count as an eviction)    ");
   blk("  DEPLOY_ALL        = true                                      ");
   blk("  TARGET_ALERT_ALL  = true        (operator INTERCEPT/SURVEY)   ");
   blk("                                                                ");

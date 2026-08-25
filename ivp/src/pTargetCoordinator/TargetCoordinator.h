@@ -51,6 +51,24 @@ class TargetCoordinator : public AppCastingMOOSApp
   void assignAndPost();
   void clearPincerVisuals();
 
+  void   assignAndPostBlock();
+  bool   blockPoints(double& b1x, double& b1y,
+		     double& b2x, double& b2y) const;
+  bool   blockStillGood(double bx, double by) const;
+  bool   blockSpent(double bx, double by) const;
+  bool   blockOffTrack(double bx, double by) const;
+  double usvSpeed(unsigned int vidx) const;
+  double transitTime(unsigned int vidx, double bx, double by) const;
+  bool   blockTransitHold(unsigned int slot) const;
+  double feasibleLead() const;
+  double blockOffset() const;
+  double currentBlockOffset() const;
+  void   updateAdaptiveOffset();
+  void   resetAdaptiveOffset();
+  void   postBlockVisuals();
+  void   clearBlockVisuals();
+  void   standDownBlock();
+
   bool   targetPosition(double& x, double& y) const;
   bool   pincerBaseAngle(double& base_angle, std::string& basis) const;
   std::vector<double>       computeSlots(double base_angle) const;
@@ -68,6 +86,8 @@ class TargetCoordinator : public AppCastingMOOSApp
   bool   contactHeld() const;
   void   updateExitDirection();
   double exitCost(double bearing, double heading) const;
+  double regionOffset(double x, double y) const;
+  double exitDistance(double bearing) const;
   void   updateEngagement();
   bool   nearestRangeToTarget(double& range, std::string& vname) const;
   bool   targetClearOfRegion(double buffer) const;
@@ -107,6 +127,39 @@ class TargetCoordinator : public AppCastingMOOSApp
   double                   m_min_standoff;      // floor under trail_range
   double                   m_heading_bias;   // cost metres per degree off head
   double                   m_exit_margin;    // cost a new exit must beat by
+  double                   m_exit_commit;    // secs a challenger must hold
+  bool                     m_swap_lock;      // freeze the pairing when engaged
+
+  // Blocking stations. See assignAndPostBlock().
+  bool                     m_block_mode;
+  double                   m_block_lead;      // metres ahead of the intruder
+  double                   m_block_offset;    // lateral offset = imposed CPA
+  double                   m_block_span;      // extra offset for the denier
+  double                   m_block_lead2;     // denier lead, as a fraction
+  double                   m_block_slack;     // track error that voids a point
+  double                   m_block_min_lead;  // point is spent once this close
+  double                   m_block_interval;  // min secs between re-issues
+  double                   m_block_min_offset;// hard floor under block_offset
+  double                   m_block_dead_deg;  // |turn wanted| below this = none
+  double                   m_block_abort;     // range at which we give way
+  double                   m_block_rearm;     // extra range before blocking again
+
+  // Adaptive offset: block_offset above is now a CEILING, not the
+  // number used. See updateAdaptiveOffset().
+  double                   m_block_reaction_wait; // secs to wait for a reaction
+  double                   m_block_reaction_deg;  // heading change = "it reacted"
+  double                   m_block_shrink_step;   // metres shaved per failed wait
+
+  // Hysteresis on which side we stand. See assignAndPostBlock().
+  double                   m_block_side_commit;   // secs a flip must hold
+
+  // Transit feasibility. Measured: stations were being replaced 2.5-4x
+  // faster than the USV could reach them. See blockTransitHold().
+  bool                     m_block_commit_transit;
+  double                   m_block_transit_frac;  // hold this x transit time
+  double                   m_block_transit_cap;   // but never longer than this
+  bool                     m_block_feasible;      // shorten lead to reachable
+  double                   m_block_usv_speed;     // fallback if report has none
 
  protected: // State variables
   std::map<std::string, NodeRecord> m_records;
@@ -139,10 +192,32 @@ class TargetCoordinator : public AppCastingMOOSApp
   bool         m_rings_drawn;
   double       m_last_ring_utc;
 
-  // Chosen eviction direction, with hysteresis.
+  // Chosen eviction direction, latched for the run. See
+  // updateExitDirection().
   double       m_exit_dir;
   bool         m_exit_valid;
   double       m_exit_cost;
+  double       m_exit_since;            // when the current exit was set
+  double       m_exit_challenge_since;  // -1 when nothing is challenging
+  unsigned int m_swaps_declined;
+
+  // Blocking-station state, one ground-fixed point per USV.
+  std::vector<double>       m_block_x;
+  std::vector<double>       m_block_y;
+  std::vector<bool>         m_block_valid;
+  std::vector<double>       m_block_utc;
+  std::vector<bool>         m_block_giving_way;
+  bool                      m_block_posted;
+  int                       m_block_side;      // +1 starboard, -1 port
+  double                    m_block_side_challenge_since; // -1 = none pending
+  unsigned int              m_block_reissues;
+  unsigned int              m_giveways;
+
+  // Adaptive-offset state. See updateAdaptiveOffset().
+  double                    m_block_offset_cur;   // -1 = not yet initialized
+  double                    m_block_reaction_hdg;  // baseline for this offset
+  double                    m_block_reaction_utc;  // when that baseline was set
+  bool                      m_block_reacted;        // seen a reaction this engagement
 
   // Contact-driven detection: which USVs currently hold the intruder,
   // latched by the on/off transitions their contact managers report.

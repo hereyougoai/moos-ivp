@@ -70,23 +70,7 @@ BHV_AvdColregsV22::BHV_AvdColregsV22(IvPDomain gdomain) :
 
   // Rule 14 Head-on threshold
   //  m_headon_bng_range     = 25;
-  // Half-angle of the sector, either side of dead ahead, within which
-  // BOTH vessels must see each other for Rule 14 (head-on) to apply.
-  //
-  // Rule 14(b) defines the situation by the sidelights being in view,
-  // and a sidelight is cut off at 22.5 degrees abaft the beam on its
-  // own side -- so "ahead or nearly ahead" in the Rule's own terms is
-  // the 22.5-degree bow sector. Rule 14(c) then says that a vessel in
-  // any doubt shall ASSUME a head-on situation exists.
-  //
-  // The default here stays at the historical 12 for compatibility with
-  // existing missions, but it is now settable: below the sidelight
-  // sector, a near-reciprocal encounter fails the head-on test, fails
-  // the Rule 15 crossing test too (each vessel has the other on its own
-  // starboard bow, which is neither vessel's give-way geometry), and
-  // falls through to the side-agnostic "cpa" mode -- where a
-  // starboard-to-starboard pass is a perfectly good answer.
-  m_headon_abs_relbng_thresh = 12;
+  m_headon_abs_relbng_thresh = 12;//25;
 
   m_completed_dist = 100;
   m_initial_speed  = 0;
@@ -184,12 +168,6 @@ bool BHV_AvdColregsV22::setParam(string param, string value)
     return(resetAvoidModes(m_avoid_mode, value));
   else if(param == "no_alert_request")
     return(setBooleanOnString(m_no_alert_request, value));
-  else if((param == "headon_abs_relbng_thresh") && non_neg_number) {
-    double dval = atof(value.c_str());
-    if(dval > 90)
-      return(false);
-    m_headon_abs_relbng_thresh = dval;
-  }
   else if(param == "headon_only")
     return(setBooleanOnString(m_headon_only, value));
   else if((param == "contact_type_required") && (value != "")) {
