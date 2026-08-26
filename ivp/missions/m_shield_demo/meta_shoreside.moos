@@ -61,6 +61,16 @@ ProcessConfig = pShare
   // run counts as an eviction (Action/Eviction Distance menu).
   output = src_name=EVICT_BUFFER,      route=localhost:$(MSHIP_PSHARE=9205)
 
+  // How far each USV's bow is canted IN off the parallel while it holds
+  // its station (Action/Cant Angle menu). Same route: the coordinator
+  // that signs it per vehicle runs on the mothership.
+  output = src_name=EVICT_CANT,        route=localhost:$(MSHIP_PSHARE=9205)
+
+  // Which formation the pair takes once engaged (Action/Eviction
+  // Formation menu). Same route: the coordinator that owns the choice
+  // runs on the mothership.
+  output = src_name=EVICT_FORMATION,   route=localhost:$(MSHIP_PSHARE=9205)
+
 
   // Operator-drawn route for the intruder, straight down to the target
   // community where pTargetPathPlanner turns it into a TGT_WPT_UPDATE.
@@ -376,6 +386,41 @@ ProcessConfig = pMarineViewer
   action = SENSOR_RADIUS = 60 # BCM_ALERT_REQUEST_ALL = id=suspect_, alert_range=60, cpa_range=75 # menu_label = Sensor Range/60 m
   action = SENSOR_RADIUS = 80 # BCM_ALERT_REQUEST_ALL = id=suspect_, alert_range=80, cpa_range=100 # menu_label = Sensor Range/80 m
 
+  // --- Eviction formation -------------------------------------------
+  //
+  // WHICH SHAPE THE PAIR TAKES ONCE THE INTRUDER IS ENGAGED. One
+  // string, EVICT_FORMATION, read by pTargetCoordinator on the
+  // mothership; it is the same choice pincer_mode makes at startup,
+  // only switchable mid-run, so the three tactics can be compared
+  // against one intrusion instead of three relaunches.
+  //
+  // The three are NOT variations of one manoeuvre -- they drive
+  // different behaviors on the vehicles, and the coordinator releases
+  // whichever side is being left when you switch:
+  //
+  //   Blocking Wall (block) -- BHV_StationKeep on a ground-fixed point
+  //     laid in the intruder's path (BLOCK_UPDATE / BLOCK_ACTIVE). This
+  //     is the one that actually EVICTS: a station the intruder is
+  //     closing on gives its avoidance behavior a CPA it has to turn
+  //     for.
+  //   Pincer (herd) -- BHV_Trail on the inboard arc between the
+  //     intruder and the middle of the region (TRAIL_UPDATE). Reads as
+  //     an escort, and the spread sets how much of the intruder's
+  //     forward water the two of them cover. It does not by itself
+  //     evict: on station BHV_Trail matches the contact's velocity, so
+  //     the relative motion its avoidance scores goes flat.
+  //   Stern Chase (stern) -- the same trail arc hung off the intruder's
+  //     stern. Shadowing, not eviction; kept for comparison.
+  //
+  // The spread on the pincer entries rides along in the same message,
+  // so one menu pick sets both the formation and its width.
+  action = EVICT_FORMATION = "mode=block"           # menu_label = Eviction Formation/Blocking Wall - stand in its path (evicts)
+  action = EVICT_FORMATION = "mode=herd,spread=90"  # menu_label = Eviction Formation/Pincer 90 deg - tight, on the bows (default)
+  action = EVICT_FORMATION = "mode=herd,spread=120" # menu_label = Eviction Formation/Pincer 120 deg - on both beams
+  action = EVICT_FORMATION = "mode=herd,spread=150" # menu_label = Eviction Formation/Pincer 150 deg - wide, nearly abreast
+  action = EVICT_FORMATION = "mode=herd,spread=40"  # menu_label = Eviction Formation/Pincer 40 deg - close pair, one direction
+  action = EVICT_FORMATION = "mode=stern"           # menu_label = Eviction Formation/Stern Chase - shadow astern (no eviction)
+
   // --- Eviction distance --------------------------------------------
   //
   // How far clear of the region boundary the intruder has to be driven
@@ -399,6 +444,34 @@ ProcessConfig = pMarineViewer
   action = EVICT_BUFFER = 30 # menu_label = Eviction Distance/30 m
   action = EVICT_BUFFER = 50 # menu_label = Eviction Distance/50 m
   action = EVICT_BUFFER = 80 # menu_label = Eviction Distance/80 m - escort well clear
+
+  // --- Cant angle ---------------------------------------------------
+  //
+  // WHICH WAY THE BOWS POINT once the pair is on station. One number,
+  // EVICT_CANT, read by pTargetCoordinator on the mothership (cant_deg).
+  //
+  // The zero is "exactly parallel to the intruder", and that is not an
+  // arbitrary baseline: on station BHV_Trail steers each USV at the
+  // CONTACT'S OWN COURSE, so with no cant the pair runs abreast of the
+  // intruder on its own heading. This number turns each bow off that
+  // baseline, in toward the intruder's centreline. The coordinator
+  // signs it from the side each USV is standing on, so one number cants
+  // both of them inward rather than both the same way round the compass.
+  //
+  // It moves the BOW ONLY -- the stations stay spread_deg apart on the
+  // arc at trail_range, and the speed is still matched -- so the
+  // standoff and the shape of the formation are untouched. What changes
+  // is how the formation READS to the intruder: parallel is an escort
+  // running alongside, canted is a pair closing in on its track.
+  //
+  // Only the trail-arc formations (Pincer, Stern Chase) have a held
+  // heading to cant. In Blocking Wall the USVs are stopped on a
+  // station-keeping point and this menu does nothing.
+  action = EVICT_CANT = 0  # menu_label = Cant Angle/0 deg - parallel to the target (default)
+  action = EVICT_CANT = 10 # menu_label = Cant Angle/10 deg - slight bow-in
+  action = EVICT_CANT = 20 # menu_label = Cant Angle/20 deg - visible cut-in
+  action = EVICT_CANT = 30 # menu_label = Cant Angle/30 deg - hard bow-in
+  action = EVICT_CANT = 45 # menu_label = Cant Angle/45 deg - cutting across its track
 
   // --- USV Speed -------------------------------------------------------
   //
@@ -439,6 +512,8 @@ ProcessConfig = pMarineViewer
 
   // Engagement cycle readout from pTargetCoordinator on the mothership.
   scope = EVICT_BUFFER
+  scope = EVICT_CANT
+  scope = EVICT_FORMATION
   scope = USV_CRUISE_SPD
   scope = USV_XSPD
   scope = TGT_SPD_UPDATE

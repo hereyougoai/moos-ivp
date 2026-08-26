@@ -34,6 +34,7 @@ XLAUNCHED="no"
 NOGUI=""
 
 # Custom
+TGT_SPD=""
 
 #------------------------------------------------------------
 #  Part 3: Check for and handle command-line arguments
@@ -85,6 +86,10 @@ for ARGI; do
 	XLAUNCHED="yes"
     elif [ "${ARGI}" = "--nogui" -o "${ARGI}" = "-ng" ]; then
 	NOGUI="--nogui"
+    elif [ "${ARGI:0:6}" = "--spd=" ]; then
+	TGT_SPD="${ARGI#--spd=*}"
+    elif [ "${ARGI:0:10}" = "--tgt_spd=" ]; then
+	TGT_SPD="${ARGI#--tgt_spd=*}"
     elif [ "${ARGI}" = "--fast" -o "${ARGI}" = "-f" ]; then
 	FAST=$ARGI
     else 
@@ -163,6 +168,9 @@ done
 TARGS=" --auto --mport=9003 --pshare=9203 --shore_pshare=9200 "
 TARGS+=" $TIME_WARP $JUST_MAKE $VERBOSE "
 TARGS+=" $MMOD "
+if [ "$TGT_SPD" != "" ]; then
+    TARGS+=" --spd=$TGT_SPD "
+fi
 vecho "Launching target: $TARGS"
 ./launch_target.sh $TARGS
 sleep 0.5

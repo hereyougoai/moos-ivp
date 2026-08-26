@@ -137,13 +137,44 @@ Behavior = BHV_Trail
 
   contact     = target
   trail_range = 25      // Station distance; coordinator may override
-  // pTargetCoordinator posts ABSOLUTE bearings: it puts the USVs on the
-  // arc between the target and the middle of the mission region, so the
-  // pair forms a wall that herds the target outward rather than two
-  // boats queuing up in its wake. Until the first TRAIL_UPDATE arrives,
-  // 180 absolute (station due south of the target) is a harmless start.
+  // pTargetCoordinator computes the blocking arc in absolute bearings --
+  // it puts the USVs on the arc between the target and the middle of the
+  // mission region, so the pair forms a wall that herds the target
+  // outward rather than two boats queuing up in its wake -- but it hands
+  // the station over as an offset from the TARGET'S HEADING.
+  //
+  // Why relative and not absolute: under an absolute order the whole
+  // heading-dependent part of the geometry has to be re-sent over the
+  // wire, quantised and a tick late, so the trail points stuttered
+  // across the chart whenever the target turned. In relative mode this
+  // behavior adds the heading term itself, every helm iteration, from
+  // its own extrapolated contact record, so the station sweeps with the
+  // turn. Both frames name the same point; only the update path differs.
+  //
+  // Until the first TRAIL_UPDATE arrives, 180 relative (dead astern of
+  // the target) is a harmless start.
   trail_angle = 180
-  trail_angle_type = absolute
+  trail_angle_type = relative
+
+  // CANT ANGLE — how the USV's own BOW is held once it is ON STATION.
+  //
+  // On station this behavior steers ownship at the CONTACT'S OWN COURSE,
+  // so with no cant the two USVs run exactly PARALLEL to the intruder,
+  // alongside it. That parallel course is the zero of this number:
+  // trail_cant turns the bow off it, and pTargetCoordinator signs it per
+  // vehicle so that it always turns the bow IN toward the intruder's
+  // centreline -- the pair stops running abreast and starts cutting in.
+  //
+  // It moves the bow only. The station stays trail_angle off the
+  // intruder at trail_range and the speed is still matched, so the arc
+  // keeps its shape and its standoff; only what each USV is pointing at
+  // changes.
+  //
+  // 0 here is the stock geometry, and it is what stands until the
+  // coordinator's first TRAIL_UPDATE arrives. The live value comes from
+  // cant_deg in the pTargetCoordinator block (Action/Cant Angle on the
+  // shoreside), in the same update as the station bearing.
+  trail_cant = 0
 
   // Cornering: the trail point swings fast when the target turns, so
   // a tight capture radius makes the helm chase it and saw the rudder.

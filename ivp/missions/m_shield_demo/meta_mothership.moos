@@ -202,11 +202,19 @@ ProcessConfig = pTargetCoordinator
   // stern = the older astern fan.
   pincer_mode = herd
 
-  // 120 deg apart on the inboard arc: the two USVs sit roughly on the
-  // target's beams rather than in a queue behind it, which is what
-  // makes the envelopment visible and gives its avoidance behavior
-  // pressure from both sides at once.
-  spread_deg  = 120
+  // This is only the STARTING formation. The operator's Action/Eviction
+  // Formation menu on the shoreside posts EVICT_FORMATION, which
+  // switches between the same three (and can set the arc spread in the
+  // same message) while the engagement is running -- so the three
+  // tactics can be compared against one intrusion. Renaming the
+  // variable, or disabling the switch entirely (formation_var = ""),
+  // is done here.
+  formation_var = EVICT_FORMATION
+
+  // 90 deg apart on the inboard arc: the two USVs sit on the target's
+  // forward quarters rather than in a queue behind it, which gives its
+  // avoidance behavior strong inward pressure from both sides.
+  spread_deg  = 90
 
   // The station has to satisfy two things at once: close enough to be
   // inside the intruder's own avoidance band (pwt_outer_dist 55) so the
@@ -229,6 +237,38 @@ ProcessConfig = pTargetCoordinator
   // avoid collision must "result in passing at a safe distance".
   min_standoff = 25
 
+  // CANT ANGLE — how far each USV's BOW is turned IN, in degrees.
+  //
+  // The baseline (0) is EXACTLY PARALLEL to the intruder: on station
+  // BHV_Trail steers ownship at the contact's own course, so with no
+  // cant the pair runs abreast of the intruder on its own heading. This
+  // number turns each bow off that baseline, toward the intruder's
+  // centreline -- the higher it is, the more each USV is cutting in
+  // rather than escorting alongside.
+  //
+  // It moves the BOW ONLY. The stations stay spread_deg apart on the arc
+  // at trail_range, and the speed is still matched, so nothing about the
+  // standoff or the shape of the formation changes -- only what the two
+  // USVs are pointing at. The coordinator signs it per vehicle from the
+  // side each one is standing on, so one non-negative number here means
+  // "inward" for both; it is capped at 90, past which the bow would be
+  // turning back across the track rather than in toward it.
+  //
+  // Only meaningful in the trail-arc modes (herd/stern): in block mode
+  // the USVs are stopped on a station-keeping point and have no held
+  // heading to cant. The operator can change it mid-run from the
+  // shoreside Action/Cant Angle menu, which posts EVICT_CANT.
+  //
+  // 0 = off, the geometry every measurement in this file was taken on.
+  cant_deg      = 0
+
+  // A station dead ahead of the intruder, or dead astern, sits ON the
+  // centreline and has no inward side -- both directions turn the bow
+  // equally far off the track. Within this many degrees of that line the
+  // cant is dropped rather than letting noise flip the bow from one beam
+  // to the other.
+  cant_dead_deg = 5
+
   // Hysteresis on the station pairing. Without it the two USVs traded
   // stations at 2 Hz once they were near-symmetric about the target,
   // and both just spun in place.
@@ -240,6 +280,20 @@ ProcessConfig = pTargetCoordinator
 
   repost_interval = 4
   draw_pincer     = true
+
+  // Frame the station bearing is handed to BHV_Trail in.
+  //
+  // The arc is computed in absolute bearings either way. Ordered as an
+  // absolute bearing, though, every degree the intruder turns has to
+  // come back out as a fresh TRAIL_UPDATE -- quantised to 1 degree, at
+  // this app's tick, one pShare hop late -- so the two station points
+  // sat still and then jumped across the chart during a turn.
+  // "relative" hands BHV_Trail the offset from the intruder's heading
+  // instead and lets it add the heading term itself, every helm
+  // iteration, off its own extrapolated contact record: the station
+  // sweeps smoothly through the turn and only the slow part of the
+  // geometry (which way we are herding) travels over the wire.
+  station_frame   = relative
 
   //---------------------------------------------------------------
   // Automatic engagement cycle
