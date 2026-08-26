@@ -54,6 +54,17 @@ private: // Configuration parameters
   double  m_min_trail_range;
   double  m_trail_range;
   double  m_trail_angle;
+
+  // CANT ANGLE (deg). The bow offset held while ON STATION, measured
+  // from "exactly parallel to the contact's course" (0 = parallel, the
+  // stock behavior). Positive cants the bow to STARBOARD of the
+  // contact's course, negative to port. Whoever sets it decides which
+  // of those two is "inward" for the station being held --
+  // pTargetCoordinator signs it so that positive-as-configured always
+  // means canted IN toward the contact's centreline. See the note in
+  // onRunState()'s "Inside radius" branch.
+  double  m_trail_cant;
+
   double  m_radius;
   double  m_nm_radius;
   double  m_pwt_outer_dist;

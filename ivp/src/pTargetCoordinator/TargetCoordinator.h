@@ -46,6 +46,9 @@ class TargetCoordinator : public AppCastingMOOSApp
   void registerVariables();
 
   void handleMailNodeReport(std::string);
+  void handleMailFormation(std::string);
+  bool setFormation(bool block_mode, bool herd_mode, std::string why);
+  std::string formationName() const;
   void handleMailRegionCenter(std::string);
   bool recordPosition(const NodeRecord&, double& x, double& y) const;
   void assignAndPost();
@@ -70,10 +73,13 @@ class TargetCoordinator : public AppCastingMOOSApp
   void   standDownBlock();
 
   bool   targetPosition(double& x, double& y) const;
+  bool   targetHeading(double& heading) const;
   bool   pincerBaseAngle(double& base_angle, std::string& basis) const;
   std::vector<double>       computeSlots(double base_angle) const;
   double                    bowGuard(double slot_angle) const;
   double                    trailRange() const;
+  double                    cantAngle() const;
+  double                    slotCant(double slot_angle) const;
   std::vector<unsigned int> bestAssignment(const std::vector<double>& slots) const;
   double assignmentCost(const std::vector<unsigned int>&,
 			const std::vector<double>& slots) const;
@@ -106,11 +112,20 @@ class TargetCoordinator : public AppCastingMOOSApp
   double                   m_spread_deg;
   double                   m_trail_range;
   std::string              m_trigger_var;
+  std::string              m_formation_var;
   bool                     m_herd_mode;
   double                   m_swap_margin_deg;
+
+  // CANT ANGLE. How far each USV's BOW is turned IN off the parallel,
+  // in degrees. See cantAngle() / slotCant().
+  double                   m_cant_deg;
+  double                   m_cant_dead_deg;
   double                   m_center_deadzone;
   double                   m_repost_interval;
   bool                     m_draw_pincer;
+
+  // Frame the station bearing is ORDERED in. See assignAndPost().
+  bool                     m_station_relative;
 
   bool                     m_auto_engage;
   double                   m_detect_range;     // 0 => from sensor radius
@@ -172,6 +187,7 @@ class TargetCoordinator : public AppCastingMOOSApp
 
   std::vector<unsigned int> m_assignment;
   std::vector<double>       m_posted_angle;
+  std::vector<double>       m_posted_cant;
   double                    m_last_post_utc;
   std::string               m_basis;
   unsigned int              m_swaps;

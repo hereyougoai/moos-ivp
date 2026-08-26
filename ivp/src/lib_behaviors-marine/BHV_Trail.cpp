@@ -47,6 +47,7 @@ BHV_Trail::BHV_Trail(IvPDomain gdomain) : IvPContactBehavior(gdomain)
   
   m_trail_range    = 50;
   m_trail_angle    = 180;
+  m_trail_cant     = 0;      // 0 = hold the contact's course exactly
   m_radius         = 5;
   m_nm_radius      = 20;
   m_pwt_outer_dist = 0;
@@ -68,6 +69,8 @@ BHV_Trail::BHV_Trail(IvPDomain gdomain) : IvPContactBehavior(gdomain)
 //  
 //    trail_range: desired range to the vehicle trailed.
 //    trail_angle: desired angle to the vehicle trailed.
+//     trail_cant: bow offset held on station, in degrees off the
+//                 contact's own course (0 = parallel; +stbd, -port).
 //         radius: distance to the desired trailing point within
 //                 which the behavior is "shadowing".
 //      nm_radius: If within this and heading ahead of target slow down
@@ -101,6 +104,20 @@ bool BHV_Trail::setParam(string param, string param_val)
       m_trail_angle = angle180(dval);
       return(true);
     }  
+  }
+  else if(param == "trail_cant") {
+    if(isNumber(param_val)) {
+      double cant = angle180(dval);
+      // A quarter turn is the most this can mean: past 90 the bow is no
+      // longer canting in toward the contact's track, it is turning
+      // back across it.
+      if(cant > 90)
+	cant = 90;
+      if(cant < -90)
+	cant = -90;
+      m_trail_cant = cant;
+      return(true);
+    }
   }
   else if(param == "trail_angle_type") {
     param_val = tolower(param_val);
@@ -297,9 +314,19 @@ IvPFunction *BHV_Trail::onRunState()
   else {
     postMessage("REGION", "Inside radius");
     ZAIC_PEAK hdg_zaic(m_domain, "course");
-    
+
+    // ON STATION the stock behavior steers the contact's own course, so
+    // ownship ends up exactly PARALLEL to it. That parallel course is
+    // the zero of trail_cant: the cant angle turns the bow off it by
+    // trail_cant degrees (+ starboard, - port) while leaving the
+    // station point itself, and the speed match, untouched. Ownship
+    // still holds the same place on the arc; it just holds it canted.
+    double hold_hdg = angle360(m_cnh + m_trail_cant);
+    postIntMessage("TRAIL_CANT", m_trail_cant);
+    postIntMessage("TRAIL_HEADING", hold_hdg);
+
     // summit, pwidth, bwidth, delta, minutil, maxutil
-    hdg_zaic.setParams(m_cnh, 30, 150, 50, 0, 100);
+    hdg_zaic.setParams(hold_hdg, 30, 150, 50, 0, 100);
     hdg_zaic.setValueWrap(true);
     
     IvPFunction *hdg_ipf = hdg_zaic.extractIvPFunction();

@@ -23,15 +23,24 @@ using namespace std;
 TargetCoordinator::TargetCoordinator()
 {
   m_target_name = "target";
-  m_spread_deg  = 120;
+  m_spread_deg  = 90;
   m_trail_range = 25;
   m_trigger_var = "TARGET_ALERT_ALL";
+
+  // The operator's Eviction Formation menu on the shoreside. Same
+  // three formations pincer_mode selects at startup, switchable while
+  // the engagement is running.
+  m_formation_var = "EVICT_FORMATION";
 
   m_herd_mode       = true;
   m_swap_margin_deg = 30;
   m_center_deadzone = 20;
   m_repost_interval = 4;
   m_draw_pincer     = true;
+
+  // Order stations as an offset from the intruder's heading rather
+  // than as a compass bearing. See assignAndPost() for why.
+  m_station_relative = true;
 
   m_intercept_active   = false;
   m_assignments_posted = 0;
@@ -64,6 +73,13 @@ TargetCoordinator::TargetCoordinator()
   // does: by the target being driven off. Set false to make INTERCEPT
   // a latch that only the SURVEY button releases.
   m_operator_release   = true;
+
+  // CANT ANGLE. 0 = the stock geometry: on station BHV_Trail steers the
+  // contact's own course, so each USV lies exactly PARALLEL to the
+  // intruder. Above zero, each bow is turned that many degrees IN
+  // toward the intruder's centreline. See cantAngle() and slotCant().
+  m_cant_deg           = 0;
+  m_cant_dead_deg      = 5;
 
   // Half-width of the sector dead ahead of the intruder that stations
   // are nudged out of. Small on purpose -- see bowGuard().
@@ -217,6 +233,30 @@ bool TargetCoordinator::OnNewMail(MOOSMSG_LIST &NewMail)
       else
 	reportRunWarning("Bad EVICT_BUFFER: " + sval);
     }
+    else if(key == "EVICT_CANT") {
+      // How far each USV's bow is canted IN off the parallel while it
+      // holds its station (Action/Cant Angle on the shoreside). Same
+      // DOUBLE-vs-string caveat as SENSOR_RADIUS above.
+      double newval;
+      if(setNonNegDoubleOnString(newval, stripBlankEnds(sval))) {
+	if(newval > 90)
+	  newval = 90;
+	if(newval != m_cant_deg) {
+	  m_cant_deg = newval;
+	  // The stations themselves have not moved, so the 1-degree
+	  // deadband in assignAndPost() would swallow the change and
+	  // the new cant would not reach the vehicles until something
+	  // else happened to move the arc. Forget what was posted so
+	  // the next pass re-sends it.
+	  m_posted_angle.clear();
+	  m_posted_cant.clear();
+	  reportEvent("Cant angle set to " + doubleToStringX(m_cant_deg,1) +
+		      " deg inward off the parallel.");
+	}
+      }
+      else
+	reportRunWarning("Bad EVICT_CANT: " + sval);
+    }
     else if(key == "DEPLOY_ALL") {
       bool deployed = (tolower(sval) == "true");
       // Coming out of a deploy, start the engagement cycle from
@@ -232,6 +272,8 @@ bool TargetCoordinator::OnNewMail(MOOSMSG_LIST &NewMail)
 	eraseDetectRings();
       m_deployed = deployed;
     }
+    else if((key == m_formation_var) && (m_formation_var != ""))
+      handleMailFormation(sval);
     else if(key == m_trigger_var) {
       // The operator's INTERCEPT / SURVEY buttons. INTERCEPT starts the
       // SAME engagement the detector starts -- it is a way to trigger
@@ -255,6 +297,7 @@ bool TargetCoordinator::OnNewMail(MOOSMSG_LIST &NewMail)
 	// whichever flank they happen to be on right now.
 	m_assignment.clear();
 	m_posted_angle.clear();
+	m_posted_cant.clear();
 	m_exit_valid           = false;
 	m_exit_challenge_since = -1;
 	m_block_side_challenge_since = -1;
@@ -368,6 +411,10 @@ bool TargetCoordinator::OnStartUp()
 	m_trigger_var = value;
 	handled = true;
       }
+      else if(param == "formation_var") {
+	m_formation_var = value;
+	handled = true;
+      }
       else if(param == "pincer_mode") {
 	string mode = tolower(value);
 	if(mode == "block") {
@@ -426,6 +473,10 @@ bool TargetCoordinator::OnStartUp()
 	handled = setBooleanOnString(m_block_feasible, value);
       else if(param == "block_usv_speed")
 	handled = setPosDoubleOnString(m_block_usv_speed, value);
+      else if(param == "cant_deg")
+	handled = setNonNegDoubleOnString(m_cant_deg, value);
+      else if(param == "cant_dead_deg")
+	handled = setNonNegDoubleOnString(m_cant_dead_deg, value);
       else if(param == "swap_margin_deg")
 	handled = setNonNegDoubleOnString(m_swap_margin_deg, value);
       else if(param == "center_deadzone")
@@ -434,6 +485,15 @@ bool TargetCoordinator::OnStartUp()
 	handled = setPosDoubleOnString(m_repost_interval, value);
       else if(param == "draw_pincer")
 	handled = setBooleanOnString(m_draw_pincer, value);
+      else if(param == "station_frame") {
+	string sval = tolower(value);
+	if(sval == "relative")
+	  m_station_relative = true;
+	else if(sval == "absolute")
+	  m_station_relative = false;
+	else
+	  handled = false;
+      }
       else if(param == "auto_engage")
 	handled = setBooleanOnString(m_auto_engage, value);
       else if(param == "detect_range")
@@ -496,9 +556,168 @@ void TargetCoordinator::registerVariables()
   Register("REGION_POLY", 0);
   Register("SENSOR_RADIUS", 0);
   Register("EVICT_BUFFER", 0);
+  Register("EVICT_CANT", 0);
   Register("SUSPECT_REPORT", 0);
   Register("DEPLOY_ALL", 0);
   Register(m_trigger_var, 0);
+  if(m_formation_var != "")
+    Register(m_formation_var, 0);
+}
+
+//------------------------------------------------------------
+// Procedure: formationName()
+
+string TargetCoordinator::formationName() const
+{
+  if(m_block_mode)
+    return("block");
+  if(m_herd_mode)
+    return("herd");
+  return("stern");
+}
+
+//------------------------------------------------------------
+// Procedure: setFormation()
+//   Purpose: Switch the eviction formation while the mission is
+//            running, leaving no half of the old one behind.
+//
+//            The two formations drive DIFFERENT behaviors on the
+//            vehicles -- herd/stern place BHV_Trail through
+//            TRAIL_UPDATE, block places BHV_StationKeep through
+//            BLOCK_UPDATE, and the two are made mutually exclusive by
+//            BLOCK_ACTIVE. So a switch is not just a flag: whichever
+//            side is being left has to be released, or a vehicle can
+//            end up holding a station nobody is updating any more,
+//            with a stale marker still drawn over it.
+
+bool TargetCoordinator::setFormation(bool block_mode, bool herd_mode,
+				     string why)
+{
+  if((block_mode == m_block_mode) && (herd_mode == m_herd_mode))
+    return(false);
+
+  string was = formationName();
+
+  if(m_block_mode && !block_mode)
+    standDownBlock();       // releases BLOCK_ACTIVE and its visuals
+  if(!m_block_mode && block_mode)
+    clearPincerVisuals();   // the trail arc's arms and station markers
+
+  m_block_mode = block_mode;
+  m_herd_mode  = herd_mode;
+
+  // The arc (or the pair of blocking points) is about to be re-derived
+  // from a different geometry, so the standing pairing and the "already
+  // posted this angle" memory are both meaningless now. Dropping them
+  // re-pairs each USV to the flank it is actually on and forces a fresh
+  // order out immediately, rather than at the next heartbeat.
+  m_assignment.clear();
+  m_posted_angle.clear();
+  m_posted_cant.clear();
+  m_block_side_challenge_since = -1;
+  resetAdaptiveOffset();
+
+  reportEvent("Eviction formation: " + was + " -> " + formationName() +
+	      (why == "" ? "" : " (" + why + ")"));
+  return(true);
+}
+
+//------------------------------------------------------------
+// Procedure: handleMailFormation()
+//   Purpose: The operator's Eviction Formation menu.
+//
+//   Accepts: a bare formation name --
+//              block | herd | stern   (aliases: wall, pincer, tail)
+//            or a comma-separated list that can also carry the
+//            formation's shape, so one menu entry can say both which
+//            formation and how wide:
+//              mode=herd, spread_deg=150, trail_range=30, cant=25
+
+void TargetCoordinator::handleMailFormation(string sval)
+{
+  string str = stripBlankEnds(sval);
+  if(str == "")
+    return;
+
+  string mode;
+  double spread = 0, range = 0, cant = 0;
+  bool   got_spread = false, got_range = false, got_cant = false;
+  bool   ok = true;
+
+  vector<string> svector = parseString(str, ',');
+  for(unsigned int i=0; i<svector.size(); i++) {
+    string param = tolower(stripBlankEnds(biteStringX(svector[i], '=')));
+    string value = stripBlankEnds(svector[i]);
+
+    if(value == "") {          // a bare word: the formation name
+      mode = param;
+    }
+    else if((param == "mode") || (param == "formation"))
+      mode = tolower(value);
+    else if((param == "spread_deg") || (param == "spread"))
+      got_spread = ok = setPosDoubleOnString(spread, value);
+    else if(param == "trail_range")
+      got_range = ok = setPosDoubleOnString(range, value);
+    else if((param == "cant_deg") || (param == "cant"))
+      got_cant = ok = setNonNegDoubleOnString(cant, value);
+    else
+      ok = false;
+
+    if(!ok) {
+      reportRunWarning("Bad " + m_formation_var + ": " + sval);
+      return;
+    }
+  }
+
+  bool block_mode = m_block_mode;
+  bool herd_mode  = m_herd_mode;
+
+  if(mode != "") {
+    if((mode == "block") || (mode == "wall")) {
+      block_mode = true;
+      herd_mode  = true;
+    }
+    else if((mode == "herd") || (mode == "pincer")) {
+      block_mode = false;
+      herd_mode  = true;
+    }
+    else if((mode == "stern") || (mode == "tail") || (mode == "trail")) {
+      block_mode = false;
+      herd_mode  = false;
+    }
+    else {
+      reportRunWarning("Unknown " + m_formation_var + " mode: " + mode);
+      return;
+    }
+  }
+
+  // Shape first, so the formation the switch turns on is built with the
+  // width the same menu entry asked for rather than the previous one.
+  if(got_spread && (spread != m_spread_deg)) {
+    m_spread_deg = spread;
+    m_posted_angle.clear();
+    m_posted_cant.clear();
+    reportEvent("Arc spread set to " + doubleToStringX(m_spread_deg,1) + " deg.");
+  }
+  if(got_range && (range != m_trail_range)) {
+    m_trail_range = range;
+    m_posted_angle.clear();
+    m_posted_cant.clear();
+    reportEvent("Station range set to " + doubleToStringX(trailRange(),1) + " m.");
+  }
+  if(got_cant) {
+    if(cant > 90)
+      cant = 90;
+    if(cant != m_cant_deg) {
+      m_cant_deg = cant;
+      m_posted_angle.clear();
+      m_posted_cant.clear();
+      reportEvent("Cant angle set to " + doubleToStringX(m_cant_deg,1) +
+		  " deg inward off the parallel.");
+    }
+  }
+
+  setFormation(block_mode, herd_mode, "operator");
 }
 
 //------------------------------------------------------------
@@ -591,6 +810,18 @@ bool TargetCoordinator::targetPosition(double& x, double& y) const
 }
 
 //------------------------------------------------------------
+// Procedure: targetHeading()
+
+bool TargetCoordinator::targetHeading(double& heading) const
+{
+  map<string, NodeRecord>::const_iterator t = m_records.find(m_target_name);
+  if(t == m_records.end())
+    return(false);
+  heading = angle360(t->second.getHeading());
+  return(true);
+}
+
+//------------------------------------------------------------
 // Procedure: pincerBaseAngle()
 //   Purpose: The bearing the blocking arc is centred on.
 //
@@ -650,8 +881,8 @@ bool TargetCoordinator::pincerBaseAngle(double& base_angle, string& basis) const
 // Procedure: computeSlots()
 //   Purpose: The blocking arc: n stations spread evenly over
 //            m_spread_deg, centred on base_angle. Absolute compass
-//            bearings from the target, so BHV_Trail must be running
-//            with trail_angle_type=absolute.
+//            bearings from the target; assignAndPost() converts them
+//            to the frame BHV_Trail is actually ordered in.
 
 vector<double> TargetCoordinator::computeSlots(double base_angle) const
 {
@@ -734,6 +965,79 @@ double TargetCoordinator::trailRange() const
   if(m_trail_range < m_min_standoff)
     return(m_min_standoff);
   return(m_trail_range);
+}
+
+//------------------------------------------------------------
+// Procedure: cantAngle()
+//   Purpose: The configured cant angle, clamped to what the word can
+//            still mean.
+//
+//   WHAT THE CANT ANGLE IS. Zero is "exactly parallel to the intruder":
+//   on station BHV_Trail steers ownship at the contact's own course, so
+//   with no cant the two USVs run alongside the intruder on the same
+//   heading it has. The cant angle turns each bow off that baseline, IN
+//   toward the intruder's centreline -- the USV stops running abreast
+//   and starts cutting in.
+//
+//   It moves the BOW ONLY. The station itself is still trail_angle off
+//   the intruder at trailRange(), and the speed is still matched, so
+//   the arc keeps its shape: the cant changes what each USV is pointing
+//   at, not where it is standing.
+//
+//   Past 90 the bow is no longer canting in toward the track, it is
+//   turning back across it, so that is the ceiling.
+
+double TargetCoordinator::cantAngle() const
+{
+  if(m_cant_deg <= 0)
+    return(0);
+  if(m_cant_deg > 90)
+    return(90);
+  return(m_cant_deg);
+}
+
+//------------------------------------------------------------
+// Procedure: slotCant()
+//   Purpose: Turn the cant MAGNITUDE into the signed bow offset for one
+//            station, so that positive always means "canted inward".
+//
+//   Which way "inward" is depends on which side of the intruder's track
+//   the station sits on, and that is what this decides. rel is the
+//   station's bearing off the intruder's own head:
+//
+//     rel > 0  station on the intruder's STARBOARD side, so its
+//              centreline lies to port of the USV -- cant to PORT.
+//     rel < 0  station to PORT, centreline to starboard -- cant to
+//              STARBOARD.
+//
+//   BHV_Trail's trail_cant is signed the other way round (+ = starboard
+//   of the contact's course), hence the negation.
+//
+//   A station sitting ON the centreline -- dead ahead of the intruder or
+//   dead astern of it -- has no inward side at all: both directions turn
+//   the bow equally far off the track. Rather than let a fraction of a
+//   degree of noise decide it and flip the bow from one beam to the
+//   other, cant_dead_deg either side of the line means no cant.
+
+double TargetCoordinator::slotCant(double slot_angle) const
+{
+  double cant = cantAngle();
+  if(cant <= 0)
+    return(0);
+
+  double hdg = 0;
+  if(!targetHeading(hdg))
+    return(0);
+
+  double rel = angle180(slot_angle - hdg);
+
+  // Dead ahead, or dead astern: no inward side to cant toward.
+  if(fabs(rel) <= m_cant_dead_deg)
+    return(0);
+  if(fabs(rel) >= (180 - m_cant_dead_deg))
+    return(0);
+
+  return((rel > 0) ? -cant : cant);
 }
 
 //------------------------------------------------------------
@@ -879,6 +1183,8 @@ void TargetCoordinator::assignAndPost()
 
   if(m_posted_angle.size() != n)
     m_posted_angle.assign(n, -999);
+  if(m_posted_cant.size() != n)
+    m_posted_cant.assign(n, -999);
 
   // Re-post when a station has actually moved, and on a slow heartbeat
   // so a vehicle that (re)joined late still picks up its assignment.
@@ -890,15 +1196,60 @@ void TargetCoordinator::assignAndPost()
     if(vidx >= n)
       continue;
 
-    if(!refresh_due && (fabs(angle180(slots[slot] - m_posted_angle[vidx])) < 1.0))
+    // WHICH FRAME THE STATION IS ORDERED IN.
+    //
+    // The arc itself is computed in absolute bearings, and ordering it
+    // that way is exactly what it says: the trail point sits at a fixed
+    // compass bearing from the intruder. The problem is that the arc is
+    // not actually static -- bowGuard() and the stern fallback both
+    // track the intruder's heading -- so under an absolute order every
+    // degree of the intruder's turn has to travel back out as a fresh
+    // TRAIL_UPDATE. Those arrive quantised (the 1-degree deadband
+    // below), at this app's tick, and one pShare hop late, so on the
+    // chart the two station points do not sweep with the turn: they sit
+    // still and then jump. That is the stutter.
+    //
+    // Ordered RELATIVE to the intruder's heading, the heading term is
+    // applied by BHV_Trail itself, locally, every helm iteration, off
+    // its own extrapolated contact record -- so the point sweeps
+    // smoothly through the turn and only the slow part of the geometry
+    // (which way we are herding it) comes over the wire.
+    double post_angle = slots[slot];
+    if(m_station_relative) {
+      double hdg = 0;
+      if(!targetHeading(hdg))
+	continue;
+      post_angle = angle180(slots[slot] - hdg);
+    }
+
+    // The cant is signed off which side of the intruder's TRACK the
+    // station is on, so under an absolute station frame it can flip
+    // while the station bearing itself has not moved at all -- the
+    // intruder turned instead. Testing it here as well as the bearing
+    // is what makes sure that flip is actually sent.
+    double post_cant = slotCant(slots[slot]);
+
+    if(!refresh_due &&
+       (fabs(angle180(post_angle - m_posted_angle[vidx])) < 1.0) &&
+       (fabs(post_cant - m_posted_cant[vidx]) < 1.0))
       continue;
 
-    string spec = "trail_angle=" + doubleToStringX(slots[slot],1);
-    spec += " # trail_angle_type=absolute";
+    string spec = "trail_angle=" + doubleToStringX(post_angle,1);
+    spec += " # trail_angle_type=";
+    spec += (m_station_relative ? "relative" : "absolute");
     spec += " # trail_range=" + doubleToStringX(trailRange(),1);
 
+    // The cant angle rides along in the same update. Like the station
+    // bearing it is expressed RELATIVE to the intruder's heading --
+    // BHV_Trail adds the heading term itself, locally, every helm
+    // iteration -- so a turning intruder does not have to be chased
+    // with a stream of fresh absolute headings over the wire. Only the
+    // side the USV is standing on, which changes slowly, travels here.
+    spec += " # trail_cant=" + doubleToStringX(post_cant,1);
+
     Notify("TRAIL_UPDATE_" + toupper(m_vnames[vidx]), spec);
-    m_posted_angle[vidx] = slots[slot];
+    m_posted_angle[vidx] = post_angle;
+    m_posted_cant[vidx]  = post_cant;
     posted_any = true;
   }
 
@@ -2238,6 +2589,7 @@ void TargetCoordinator::updateEngagement()
       m_detections++;
       m_assignment.clear();
       m_posted_angle.clear();
+      m_posted_cant.clear();
       m_exit_valid           = false;
       m_exit_challenge_since = -1;
       m_block_side_challenge_since = -1;
@@ -2297,6 +2649,7 @@ void TargetCoordinator::updateEngagement()
     m_evictions++;
   m_assignment.clear();
   m_posted_angle.clear();
+  m_posted_cant.clear();
   m_exit_challenge_since = -1;
   postAlert(false);
 }
@@ -2410,14 +2763,32 @@ bool TargetCoordinator::buildReport()
   m_msgs << "Configuration:" << endl;
   m_msgs << "  Vehicles:    " << stringVectorToString(m_vnames, ':') << endl;
   m_msgs << "  Target Name: " << m_target_name << endl;
-  m_msgs << "  Pincer Mode: " << (m_herd_mode ? "herd" : "stern") << endl;
+  m_msgs << "  Formation:   " << formationName()
+	 << "   (switch with " << m_formation_var << ")" << endl;
   m_msgs << "  Spread Deg:  " << doubleToStringX(m_spread_deg) << endl;
   m_msgs << "  Trail Range: " << doubleToStringX(trailRange());
   if(trailRange() > m_trail_range)
     m_msgs << "  (raised from " << doubleToStringX(m_trail_range)
 	   << " by min_standoff)";
   m_msgs << endl;
+  m_msgs << "  Cant Angle:  " << doubleToStringX(cantAngle())
+	 << " deg inward off the parallel";
+  if(cantAngle() <= 0)
+    m_msgs << "  (0 = bows parallel to the target)";
+  m_msgs << endl;
+  if(cantAngle() > 0) {
+    m_msgs << "               ";
+    for(unsigned int i=0; i<m_posted_cant.size(); i++) {
+      if(i < m_vnames.size())
+	m_msgs << m_vnames[i] << " "
+	       << doubleToStringX(m_posted_cant[i],1) << "  ";
+    }
+    m_msgs << " (signed: + stbd of target course, - port)" << endl;
+  }
   m_msgs << "  Swap Margin: " << doubleToStringX(m_swap_margin_deg) << endl;
+  m_msgs << "  Stn Frame:   "
+	 << (m_station_relative ? "relative (offset from target heading)"
+	                        : "absolute (compass bearing)") << endl;
   m_msgs << "  Exit Bearing:";
   if(m_exit_valid) {
     m_msgs << " " << doubleToStringX(m_exit_dir,0)
@@ -2556,8 +2927,12 @@ bool TargetCoordinator::buildReport()
 	 << doubleToStringX(t->second.getHeading(),1) << endl;
   m_msgs << "Arc centered on:   " << doubleToStringX(base_angle,1)
 	 << "  [" << basis << "]" << endl;
-  m_msgs << "(station angles below are ABSOLUTE bearings from the target)"
-	 << endl << endl;
+  if(m_station_relative)
+    m_msgs << "(station angles below are ABSOLUTE bearings from the target; "
+	   << "they are ordered as offsets from its heading)" << endl << endl;
+  else
+    m_msgs << "(station angles below are ABSOLUTE bearings from the target)"
+	   << endl << endl;
 
   vector<double> slots = computeSlots(base_angle);
   vector<unsigned int> order = m_assignment;
