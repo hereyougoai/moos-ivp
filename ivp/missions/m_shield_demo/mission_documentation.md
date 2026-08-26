@@ -1,4 +1,4 @@
-﻿# m_shield_demo 與 ivp/src 核心模組技術架構與演算法說明文件
+# m_shield_demo 與 ivp/src 核心模組技術架構與演算法說明文件
 
 本文件針對 **m_shield_demo（Shield AI 協同搜索、包夾與驅逐防衛任務）** 與 **ivp/src 核心程式庫** 的最新演算法、模組重構與架構設計，提供完整且深入的技術說明。
 
@@ -15,7 +15,7 @@ graph TD
         pTC[pTargetCoordinator<br/>自主接戰狀態機/逃逸路徑評估/阻擋弧包夾]
         pTPP[pTargetPathPlanner<br/>入侵目標即時路徑規劃]
         BAC[BHV_AvdColregsV22<br/>COLREGS 國際避碰規則]
-        BTR[BHV_Trail<br/>絕對方位包夾與航跡自動清理]
+        BTR[BHV_Trail<br/>相對艏向包夾與航跡自動清理]
         PMV[pMarineViewer / PMV_GUI<br/>階層式下拉選單與圖台可視化]
     end
 
@@ -120,7 +120,8 @@ stateDiagram-v2
 `
 
 * **為什麼不能僅憑「脫離感測範圍（Contact Lost）」判定驅逐成功？**
-  若以失去感測為脫離條件，當目標船在任務區內部因避碰微幅轉向而短暫脫離感測圈時，子船會立即解除攔截，目標便能趁機再次深入防區。因此系統要求：**必須同時滿足「目標位於任務區外（含 buffer）」且「持續達 elease_hold 秒（預設 8 秒）」**，才算真正驅逐成功。
+  若以失去感測為脫離條件，當目標船在任務區內部因避碰微幅轉向而短暫脫離感測圈時，子船會立即解除攔截，目標便能趁機再次深入防區。因此系統要求：**必須同時滿足「目標位於任務區外（含 buffer）」且「持續達 
+elease_hold 秒（預設 8 秒）」**，才算真正驅逐成功。
 
 ---
 
@@ -239,11 +240,43 @@ pRegionDivider 模組透過嚴謹的計算幾何演算法，將操作員繪製�
   \text{Cost}_{\text{current}} - \text{Cost}_{\text{new}} > 30^\circ
   只有當新分配的角度節省大於 ^\circ$ 時才允許交換角色，徹底消除兩船在對稱線附近以 2Hz 高頻互換站位導致的原地打轉現象。
 
-#### 步驟六：站位指令發布（ssignAndPost）
-對每艘子船發布絕對方位角追蹤更新：
-`ini
-TRAIL_UPDATE_ABE = trail_angle=145.2 # trail_angle_type=absolute # trail_range=25.0
-`
+#### 步驟六：子船內傾夾角（cantAngle & slotCant）
+
+以上五步決定的是子船**站在哪裡**，這一步決定子船**船艏朝向哪裡**。
+
+BHV_Trail 在進入捕獲半徑（on station）後，會把本船航向鎖定在**目標船本身的航向**上，也就是子船與目標船**完全平行（Parallel）**並肩而行。這個平行航向就是內傾夾角的基準線（0 度）：
+
+\text{Heading}_{\text{usv}} = \text{Heading}_{\text{tgt}} + \text{cant\_signed}
+
+其中 cant_deg 為操作者設定的內傾量（非負，上限 90 度），符號由子船站在目標船航跡的哪一側決定：
+
+\text{rel} = \text{angle180}(\text{SlotAngle}_i - \text{Heading}_{\text{tgt}})
+
+* $\text{rel} > 0$：子船位於目標**右舷**，中心線在其左手邊 → 船艏向**左（港側）**偏轉
+* $\text{rel} < 0$：子船位於目標**左舷**，中心線在其右手邊 → 船艏向**右（星側）**偏轉
+
+因此單一個非負的 cant_deg 就能讓兩艘子船**同時向內切入**，而不是兩艘都往同一個羅經方向轉。
+
+* **死區（cant_dead_deg = 5）**：若站位落在目標正前方或正後方 5 度以內，該站位本身就壓在中心線上，「向內」沒有唯一解（左右轉離航跡的角度相同），此時內傾角歸零，避免感測雜訊讓船艏在左右舷之間來回翻轉。
+* **只動船艏，不動站位**：站位仍維持在 spread_deg 的弧上、距離 trail_range，速度仍與目標匹配。整個陣型的安全距離與幾何形狀完全不變，改變的只有兩艘子船「指著哪裡」——0 度是並肩護航，加大內傾角則是切入目標航跡的逼壓姿態。
+* **僅適用於弧型陣型**：herd / stern 模式下子船有一個被鎖定的持續航向可供偏轉；block 模式下子船是停在定點做 StationKeep，沒有航向可傾。
+
+#### 步驟七：站位指令發布（assignAndPost）
+對每艘子船發布方位角追蹤更新，內傾夾角隨同一則訊息下發。內傾角與站位方位角一樣採**相對於目標航向**的表示法，由 BHV_Trail 在本地每個 helm 迭代自行加上航向項，避免目標轉向時得用高頻絕對航向去追：
+
+```ini
+TRAIL_UPDATE_ABE = trail_angle=145.2 # trail_angle_type=absolute # trail_range=25.0 # trail_cant=-20.0
+```
+
+內傾夾角相關的所有欄位：
+
+| 欄位 | 所在檔案 / 介面 | 說明 |
+| :--- | :--- | :--- |
+| cant_deg | meta_mothership.moos（pTargetCoordinator） | 內傾夾角大小，單位度，預設 0（完全平行），上限 90 |
+| cant_dead_deg | meta_mothership.moos（pTargetCoordinator） | 正前／正後方多少度內不施加內傾，預設 5 |
+| EVICT_CANT | 岸台 Action/Cant Angle 選單 | 執行期即時調整 cant_deg（0 / 10 / 20 / 30 / 45 度） |
+| EVICT_FORMATION | 岸台 Action/Eviction Formation 選單 | 可附帶 cant=25，與陣型同一則指令下達 |
+| trail_cant | meta_vehicle.bhv（BHV_Trail） | 行為端參數，**帶正負號**（+ 為目標航向右舷、- 為左舷），符號由協調器代為決定 |
 
 ---
 
@@ -304,8 +337,40 @@ TRAIL_UPDATE_ABE = trail_angle=145.2 # trail_angle_type=absolute # trail_range=2
 | pRegionDivider (Mothership) | REGION_CENTER / REGION_POLY | pTargetCoordinator (Mothership) | Local MOOSDB | 提供區域質心與精確邊界多邊形 |
 | pRegionDivider (Mothership) | WPT_UPDATE_ABE / _BEN | BHV_Waypoint (Abe / Ben Helm) | **pShare 直送 (9205 → 9201/9202)** | 下發分區搜索割草機/跳行航點序列 |
 | pRegionDivider (Mothership) | VIEW_GRID / VIEW_GRID_DELTA | pMarineViewer (Shoreside) | pShare (9205 → 9200) | 回傳面積著色網格與覆蓋率增量更新 |
-| pTargetCoordinator (Mothership) | TRAIL_UPDATE_ABE / _BEN | BHV_Trail (Abe / Ben Helm) | **pShare 直送 (9205 → 9201/9202)** | 下發絕對方位角包夾站位指令 |
+| pTargetCoordinator (Mothership) | TRAIL_UPDATE_ABE / _BEN | BHV_Trail (Abe / Ben Helm) | **pShare 直送 (9205 → 9201/9202)** | 下發包夾站位指令（相對目標艏向的角度偏移，站位隨目標轉向平順掃掠） |
 | pTargetCoordinator (Mothership) | TARGET_ALERT_AUTO / SURVEY_AUTO | pHelmIvP (Abe / Ben Helm) | **pShare 直送 (9205 → 9201/9202)** | 自主驅動狀態機在搜索與攔截間切換 |
 | pTargetCoordinator (Mothership) | VIEW_SEGLIST (pincer) / VIEW_POINT | pMarineViewer (Shoreside) | pShare (9205 → 9200) | 繪製紅色的包夾臂線段與預定站位點 |
 | pTargetCoordinator (Mothership) | SHIELD_EVICTIONS / SHIELD_STATE | pMarineViewer (Shoreside) | pShare (9205 → 9200) | 於操作台即時顯示累計驅逐成功次數與當前戰術狀態 |
 | pNodeReporter (各船隻) | NODE_REPORT_LOCAL | 所有社群 (pContactMgrV20, pTC, pRD, PMV) | pShare / uFldNodeBroker | 廣播即時船位座標、航向與航速 |
+
+---
+
+# 七、 批次模擬實驗與防衛效能大樣本評估
+
+為量化評估阻擋弧包夾演算法在不同戰術情境下的表現，本系統在背景 Headless 模式（Time Warp = 35）下實施了大規模批次蒙地卡羅與變因模擬測試。
+
+### 1. 空間幾何評估指標
+- **目標逃逸航行距離（$D_{\text{travel}}$）**：目標從被偵測接戰到首次被逐出防區期間實際航行之軌跡弧長積分（消除 $T = D/v$ 速度尺度的時間偏誤）。
+- **路徑迂迴比（Path Tortuosity, $\eta_{\text{path}} = D_{\text{travel}} / D_{\text{shortest}}$）**：衡量目標退場路徑是否筆直無繞行。
+- **避碰效用推力（PUSH Utility）**：無人艇對目標船 IvP 避碰函數所施加的強制轉向推力。
+
+### 2. 實驗一：目標航速變因對比 ($0.4 \sim 2.0\,\text{m/s}$, 15 輪試驗)
+
+| 目標速度組 ($v_{\text{tgt}}$) | 驅逐成功率 | 平均驅逐次數 | 驅離絕對耗時 ($T_{\text{evict}}$) | **目標逃逸航行距離 ($D_{\text{travel}}$)** | **路徑迂迴比 ($\text{Tortuosity}$)** | 平均壓迫力 (PUSH) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **0.4 m/s** (極慢速) | **100.0%** (3/3) | 1.00 次 | 394.0 s | **85.5 m** | **4.05** (最直接) | 10.0 |
+| **0.8 m/s** (基準速) | **100.0%** (3/3) | 1.00 次 | 147.8 s | **70.7 m** | **5.79** | 12.9 |
+| **1.2 m/s** (高速) | **100.0%** (3/3) | 1.67 次 | 224.6 s | **208.0 m** | **20.23** | 22.1 |
+| **1.6 m/s** (極高速) | **100.0%** (3/3) | **2.67 次** | **105.9 s** | **95.9 m** | **9.29** | **26.6** |
+| **2.0 m/s** (等速入侵) | **100.0%** (3/3) | 2.00 次 | 142.6 s | **133.2 m** | **12.91** | 24.1 |
+
+### 3. 實驗二：大樣本包夾角度對比 ($40^\circ, 90^\circ, 120^\circ, 150^\circ$, 等速 $2.0\,\text{m/s}$, 40 輪試驗)
+
+| 包夾角度 | 驅逐成功率 (%) | 平均驅逐次數 | 平均驅離耗時 | **目標逃逸航行距離 ($D_{\text{travel}}$)** | **路徑迂迴比 ($\text{Tortuosity}$)** | 平均壓迫力 (PUSH) | 戰術評價與大樣本穩定度 |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
+| 🏆 **90°** | **100.0%** (10/10) | **3.10 次** | **73.8 s** | **58.1 m** | **6.03** | **19.8** | **全面最優**（10輪數據極度收斂在 44~68m） |
+| **150°** | **100.0%** (10/10) | 2.20 次 | 83.1 s | **70.7 m** | 11.69 | 21.4 | **次優**（9輪優秀，1輪因開角過大被中線穿透） |
+| **120°** | **100.0%** (10/10) | 1.80 次 | 107.1 s | **94.6 m** | 9.74 | 20.7 | **中等**（9輪正常，1輪正面對遇在防區內繞行） |
+| **40°** | **90.0%** (9/10) | 1.40 次 | 329.8 s | **307.9 m** | 40.18 | 16.3 | ⚠️ **重大缺陷**（兩艇過近易淪為尾隨，1輪失敗） |
+
+> 詳細每輪日誌明細與分析報告請參閱 [simulation_benchmark_report.md](file:///l:/home/yoei/moos-ivp/ivp/missions/m_shield_demo/simulation_benchmark_report.md)。
