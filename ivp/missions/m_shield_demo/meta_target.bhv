@@ -12,6 +12,21 @@ initialize  DEPLOY = false
 initialize  RETURN = false
 initialize  AVOID  = true
 
+// Which kind of vessel this intruder is pretending to be. Every profile
+// below is gated on it, so the operator can switch ship types live from
+// the shoreside Action/Target Profile menu without relaunching. See the
+// PROFILE CATALOG comment further down for what each one does.
+initialize  TGT_PROFILE = $(TGT_PROFILE=evader)
+
+// Range gate used by the "sprinter" profile. Seeded here so the
+// condition is well-defined before pContactMgrV20 has seen anything;
+// after that the contact manager owns it (post_closest_range = true).
+initialize  CONTACT_CLOSEST_RANGE = 9999
+
+// Drives the periodic re-sync of the "zigzag" profile; owned by the
+// uTimerScript_ZigCycle block in meta_target.moos.
+initialize  TGT_ZIG = true
+
 set MODE = ACTIVE {
   DEPLOY = true
 } INACTIVE
@@ -33,6 +48,9 @@ Behavior = BHV_Waypoint
   name      = target_patrol
   pwt       = 100
   condition = MODE == PATROLLING
+  // The loiterer replaces the route with an orbit; every other profile
+  // still runs the route underneath and only modulates how it is flown.
+  condition = TGT_PROFILE != loiterer
   updates   = TGT_WPT_UPDATE
   perpetual = true
 
@@ -78,6 +96,10 @@ Behavior = BHV_AvoidCollision
   pwt        = 250
   condition  = AVOID = true
   condition  = MODE == ACTIVE
+  // merchant swaps this out for the rule-based BHV_AvdColregsV22 below;
+  // dead_ship has no propulsion and therefore no avoidance at all.
+  condition  = TGT_PROFILE != merchant
+  condition  = TGT_PROFILE != dead_ship
   updates    = TGT_CONTACT_INFO
   templating = spawn
 
@@ -113,4 +135,317 @@ Behavior = BHV_Waypoint
   nm_radius = 15.0
   point     = $(TGT_HOME)
   lead      = 8
+}
+
+//===============================================================
+// PROFILE CATALOG
+//
+// Everything above this line is the baseline intruder: a fixed patrol
+// route flown at constant speed, with a high-weight CPA avoidance that
+// makes it flee when the USVs close in. That is one kind of vessel.
+// The blocks below add six more, each gated on TGT_PROFILE so the
+// operator can switch between them live (Action/Target Profile on the
+// shoreside; the variable is pShare'd straight into this community).
+//
+//   evader     the baseline -- uncooperative intruder, reflexive
+//              CPA evasion. Nothing extra is added; this is what the
+//              patrol + target_avd_ pair above already does.
+//   merchant   a COLREGS-compliant vessel: a fishing boat or coaster
+//              that strayed in and obeys the rules of the road. It
+//              stands on where the rules say stand on, which means
+//              half the pincer stops producing pressure -- the case
+//              the meta_target.bhv header describes.
+//   sprinter   a fast craft that runs when pressed: holds patrol
+//              speed until a USV is inside the dash gate, then opens
+//              the throttle. Tests whether the pincer can hold station
+//              against a target that is not slower than the USVs.
+//   zigzag     an evasive S-turn transit -- the classic non-compliant
+//              runner. Re-syncs to the route heading every cycle so it
+//              still makes progress along the patrol instead of
+//              wandering off on a stale stem heading.
+//   lumbering  a large vessel restricted in its ability to manoeuvre:
+//              it cannot make the hard turns the evader makes, so the
+//              pincer gets a slow, predictable, high-inertia target.
+//   loiterer   an intruder that will not leave -- illegal fishing, or
+//              a vessel deliberately holding position inside the area.
+//              It orbits where it was when the profile was selected and
+//              dodges, but always comes back. This is the profile that
+//              breaks pTargetCoordinator's eviction loop assumption
+//              that pressure eventually produces a departure.
+//   harasser   grey-zone shouldering: instead of fleeing, the target
+//              closes on whichever USV is nearest. The CPA avoidance
+//              above stays active at a higher weight, so it crowds the
+//              USVs without ever making contact.
+//   dead_ship  a vessel that has lost power: propulsion commanded to
+//              zero, no avoidance, drifts to a stop. The USVs have to
+//              deal with a contact that does not respond at all.
+//
+// Note on templated blocks: each of the three templated behaviors here
+// spawns off its OWN contact-manager alert variable, not the shared
+// TGT_CONTACT_INFO. A templated behavior spawns whenever its update
+// variable arrives, regardless of whether its conditions hold, and the
+// spawned instance takes its name from the alert's "name=" field --
+// so two templates listening on one alert would collide on the name
+// and the second spawn would be silently dropped. See the matching
+// alert lines in meta_target.moos.
+//===============================================================
+
+//----------------------------------------------
+// PROFILE merchant -- BHV_AvdColregsV22
+//
+// The rule-based counterpart to target_avd_. Same distances so the two
+// profiles are compared like for like: what changes is the decision
+// rule, not the geometry. Deliberately mutually exclusive with
+// target_avd_ (see its TGT_PROFILE != merchant condition) -- running a
+// CPA avoidance and a COLREGS avoidance against the same contact at the
+// same time produces an incoherent turn.
+Behavior = BHV_AvdColregsV22
+{
+  name       = target_col_
+  pwt        = 250
+  condition  = AVOID = true
+  condition  = MODE == ACTIVE
+  condition  = TGT_PROFILE = merchant
+  updates    = TGT_COLREGS_INFO
+  templating = spawn
+
+  contact           = to-be-set
+  on_no_contact_ok  = true
+  extrapolate       = true
+  decay             = 30,60
+
+  use_refinery      = true
+  can_disable       = true
+
+  pwt_outer_dist    = 55
+  pwt_inner_dist    = 25
+  completed_dist    = 90   // > alert_range; see target_avd_ above
+
+  min_util_cpa_dist = 12
+  max_util_cpa_dist = 25
+
+  pwt_grade = linear
+  bearing_line_config = white:0, green:0.65, yellow:0.8, red:1.0
+}
+
+//----------------------------------------------
+// PROFILE sprinter -- BHV_ConstantSpeed
+//
+// Speed override, weighted above the patrol's own speed objective so it
+// wins outright while the gate is open. The gate is the contact
+// manager's CONTACT_CLOSEST_RANGE, which is posted continuously (the
+// USVs' NODE_REPORTs reach this community via the shoreside qbridge,
+// so the range never goes stale even when they are far away).
+//
+// The dash speed defaults to the helm's speed ceiling, because that is
+// the fastest thing the domain can express -- at the stock MAX_SPD of
+// 3.0 (see launch_target.sh) that is nearly 4x the 0.8 patrol speed, a
+// genuine run-for-it. Launch with --max_spd=1.2 to reproduce runs taken
+// under the old, lower ceiling; that only changes the top speed reachable
+// under a hard push (this dash, or evasion under BHV_AvoidCollision) --
+// it does not change cruise dynamics at any speed below the ceiling.
+Behavior = BHV_ConstantSpeed
+{
+  name      = target_dash
+  pwt       = 400
+  condition = MODE == ACTIVE
+  condition = TGT_PROFILE = sprinter
+  condition = CONTACT_CLOSEST_RANGE < $(TGT_DASH_GATE=50)
+  duration  = no-time-limit
+  perpetual = true
+
+  speed     = $(MAX_SPD)
+  basewidth = 0.4
+  peakwidth = 0.1
+}
+
+//----------------------------------------------
+// PROFILE zigzag -- BHV_ZigZag
+//
+// Weighted ABOVE the patrol, which is what it costs to get an
+// oscillation at all.
+//
+// BHV_ZigZag counts a leg -- and only then flips to the other side --
+// once the vessel has actually reached the heading it asked for, within
+// hdg_thresh. Run it level with or below the patrol and the combined
+// course never gets there, the leg counter never advances, and the
+// behavior sits in its first zig indefinitely: what comes out is a fixed
+// heading offset, not an S-turn. Measured at pwt 70 and again at 100,
+// the vessel simply held a displaced course and walked one way around
+// the compass, 270 -> 245 -> 219 -> 190 deg, a step per re-sync. Both a
+// higher leg count and a wider hdg_thresh were tried at those weights
+// and neither was enough on its own.
+//
+// At pwt 200 the commanded heading alternates across the full 70 deg
+// swing as intended. The price is route authority -- left to run the
+// whole cycle it overshot its waypoint by 23 m and kept going -- and
+// that is what the re-sync gap in meta_target.moos buys back: a stretch
+// of every cycle in which the patrol has the helm to itself.
+//
+// BHV_ZigZag latches its stem heading once, in onIdleToRunState, and
+// never re-reads it. Left alone on a patrol loop that stem goes stale
+// at the first corner and the behavior then fights the route for the
+// rest of the leg. The TGT_ZIG condition is what fixes that: the
+// uTimerScript_ZigCycle block in meta_target.moos drops it false and
+// raises it again on a cycle, forcing run -> idle -> run, and each
+// re-entry re-latches the stem to the current (route-corrected)
+// heading. perpetual keeps the behavior alive across the leg count
+// running out in between.
+Behavior = BHV_ZigZag
+{
+  name      = target_zigzag
+  pwt       = 200
+  condition = MODE == PATROLLING
+  condition = TGT_PROFILE = zigzag
+  condition = TGT_ZIG = true
+  perpetual = true
+
+  stem_on_active  = true
+
+  // Speed is pinned to the patrol speed rather than taken from the
+  // vessel with speed_on_active. BHV_ZigZag contributes a speed
+  // objective as well as a heading one, and speed_on_active latches
+  // that objective to whatever the vessel happens to be doing at the
+  // idle->run transition -- which, on the re-sync cycle below, is a
+  // speed the previous cycle already pulled down. Measured: the
+  // commanded speed ratcheted 0.78 -> 0.40 and actual speed fell to
+  // 0.22 m/s over a 90 s window, the vessel slowing to a crawl instead
+  // of running evasively. Naming the speed outright makes this
+  // behavior's speed objective agree with the patrol's, so only the
+  // heading is contested.
+  speed = $(TGT_SPD)
+
+  zig_angle    = $(TGT_ZIG_ANGLE=35)
+
+  // How close to the requested heading counts as having arrived, and
+  // therefore as a completed leg. It has to be wider than the steady
+  // offset the patrol behavior holds the vessel at, or the leg never
+  // counts and the behavior never flips to the other side. Measured
+  // with the stem at 266 and a 35 deg zig, the helm settled at 241 and
+  // stayed there: 10 deg short of the 231 it asked for, which the stock
+  // tolerance rejected, so the vessel simply held a displaced course.
+  hdg_thresh   = $(TGT_ZIG_THRESH=20)
+
+  // Enough legs that the behavior keeps alternating port/starboard for
+  // the whole re-sync cycle. The stock value is 2 -- one zig and one
+  // zag -- and at that setting the behavior finishes within a few
+  // seconds of each re-sync and then holds the offset heading until the
+  // next one. Because every re-sync latches the stem to the heading the
+  // previous zig already displaced, the offsets accumulate in one
+  // direction: measured, the vessel walked 270 -> 245 -> 219 -> 190 deg
+  // in three cycles, a slow one-way spiral rather than an S-turn.
+  max_zig_legs = 50
+}
+
+//----------------------------------------------
+// PROFILE lumbering -- BHV_MemoryTurnLimit
+//
+// A vessel "restricted in her ability to manoeuvre" in the COLREGS
+// sense: this constrains the helm to headings reachable given where the
+// vessel has been over the last memory_time seconds, which is what a
+// large hull's turning circle actually looks like. It shapes the other
+// behaviors' output rather than competing with them, so the patrol and
+// the avoidance both stay on -- the avoidance simply can no longer
+// produce the snap turn the evader gets away with.
+Behavior = BHV_MemoryTurnLimit
+{
+  name      = target_turnlimit
+  pwt       = 100
+  condition = MODE == ACTIVE
+  condition = TGT_PROFILE = lumbering
+
+  memory_time = $(TGT_TURN_MEMORY=25)
+  turn_range  = $(TGT_TURN_RANGE=45)
+}
+
+//----------------------------------------------
+// PROFILE loiterer -- BHV_Loiter
+//
+// center_activate means the orbit centre is taken from wherever the
+// vessel happens to be when the profile is selected, so the operator
+// can plant it anywhere in the area by switching profile at the right
+// moment -- no coordinates to edit.
+//
+// The patrol is switched off for this profile (see its
+// TGT_PROFILE != loiterer condition); target_avd_ is not, so the vessel
+// still dodges the USVs and then returns to its orbit. That "always
+// comes back" behavior is the point: it is a target the eviction loop
+// cannot finish.
+Behavior = BHV_Loiter
+{
+  name      = target_loiter
+  pwt       = 100
+  condition = MODE == PATROLLING
+  condition = TGT_PROFILE = loiterer
+  updates   = TGT_LOITER_UPDATE
+  perpetual = true
+
+  center_activate = true
+  clockwise       = false
+  speed           = $(TGT_SPD)
+  radius          = $(TGT_LOITER_RAD=20)
+  nm_radius       = 35
+  polygon         = format=radial, x=0, y=0, radius=$(TGT_LOITER_RAD=20), pts=8, snap=1
+
+  visual_hints = edge_color=gray50, vertex_color=orange
+}
+
+//----------------------------------------------
+// PROFILE harasser -- BHV_CutRange
+//
+// The inversion of the whole scenario: the intruder chases the USVs
+// instead of fleeing them. pwt sits BELOW target_avd_ (250) on purpose
+// -- the pursuit drives the closing, the avoidance sets the floor, and
+// the two together give the shouldering-without-contact behavior that
+// grey-zone harassment actually looks like. Raise this above 250 and
+// you get a collision, not a demo.
+//
+// giveup_dist = 0 disables the give-up range, so it will follow a USV
+// out of the area rather than breaking off.
+Behavior = BHV_CutRange
+{
+  name       = target_cut_
+  pwt        = 150
+  condition  = MODE == ACTIVE
+  condition  = TGT_PROFILE = harasser
+  updates    = TGT_HARASS_INFO
+  templating = spawn
+
+  contact           = to-be-set
+  on_no_contact_ok  = true
+  extrapolate       = true
+  decay             = 30,60
+
+  pwt_outer_dist = 90
+  pwt_inner_dist = 25
+  giveup_dist    = 0
+
+  patience = 70
+}
+
+//----------------------------------------------
+// PROFILE dead_ship -- BHV_ConstantSpeed
+//
+// Commanded speed zero at a weight nothing else here can outvote, so
+// the vessel coasts to a stop and stays there. target_avd_ is switched
+// off for this profile, so it will not move out of anyone's way.
+//
+// The patrol behavior is deliberately left running: it contributes the
+// heading objective, which keeps the helm producing a well-formed
+// decision over the full course/speed domain. With a speed-only
+// objective the course dimension is unconstrained and the solver is
+// free to return an arbitrary heading, which shows up as rudder chatter
+// on a vessel that is supposed to look adrift.
+Behavior = BHV_ConstantSpeed
+{
+  name      = target_adrift
+  pwt       = 600
+  condition = MODE == ACTIVE
+  condition = TGT_PROFILE = dead_ship
+  duration  = no-time-limit
+  perpetual = true
+
+  speed     = 0
+  basewidth = 0.2
+  peakwidth = 0.1
 }

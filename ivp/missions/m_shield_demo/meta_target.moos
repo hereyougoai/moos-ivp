@@ -30,6 +30,7 @@ Processconfig = ANTLER
   Run = uSimMarineV22  @ NewConsole = false
   Run = pContactMgrV20 @ NewConsole = false
   Run = pTargetPathPlanner @ NewConsole = false
+  Run = uTimerScript    @ NewConsole = false ~uTimerScript_ZigCycle
 }
 
 #include plugs.moos <pShare>
@@ -104,6 +105,27 @@ ProcessConfig = pContactMgrV20
   // spawned until 25 m, not the 60 m the behavior below is tuned for.
   alert = id=target_avd_, var=TGT_CONTACT_INFO, val="name=$[VNAME] # contact=$[VNAME]"
   alert = id=target_avd_, alert_range=60, cpa_range=75
+
+  // One alert per templated behavior in targ_$(VNAME).bhv, each with a
+  // DISTINCT name= prefix. A templated behavior spawns whenever its
+  // update variable arrives -- conditions are not consulted at spawn
+  // time -- and the instance is named from this "name=" field. Point
+  // two templates at one alert and both instances want the same name;
+  // the second is dropped, and the profile that owns it silently never
+  // runs. Hence three alerts for three templates.
+  //
+  // The COLREGS profile is matched to target_avd_'s ranges so the two
+  // avoidance models are compared on the same geometry.
+  alert = id=target_col_, var=TGT_COLREGS_INFO, val="name=col_$[VNAME] # contact=$[VNAME]"
+  alert = id=target_col_, alert_range=60, cpa_range=75
+
+  // The harasser needs to acquire its quarry well before avoidance
+  // range, otherwise it only starts the chase once the USV is already
+  // being pushed away: spawn range matches BHV_CutRange's
+  // pwt_outer_dist (90 m), with cpa_range above it as the contact
+  // manager clamps alert_range down to cpa_range otherwise.
+  alert = id=target_cut_, var=TGT_HARASS_INFO, val="name=cut_$[VNAME] # contact=$[VNAME]"
+  alert = id=target_cut_, alert_range=90, cpa_range=110
 
   post_closest_range   = true
   hold_alerts_for_helm = true
@@ -180,6 +202,42 @@ ProcessConfig = pTargetPathPlanner
   // The launch script's built-in patrol: what the vessel flies until
   // the operator draws something else.
   default_route = $(TGT_PATROL)
+}
+
+//--------------------------------------------------
+// uTimerScript_ZigCycle Config Block
+//
+// Re-sync pulse for the "zigzag" target profile.
+//
+// BHV_ZigZag latches its stem heading once, on the idle->run
+// transition, and never re-reads it. On a patrol loop that heading is
+// stale the moment the vessel rounds a corner, and from then on the
+// behavior is zigging about a bearing the route has left behind. This
+// script drops TGT_ZIG false for a few seconds every cycle, which takes
+// the behavior to idle and back, and the re-entry re-latches the stem
+// to the current heading.
+//
+// The gap has to be long enough to be worth something, not just long
+// enough to force the transition: BHV_ZigZag outweighs the patrol while
+// it is running (see its pwt), so this window is the only stretch in
+// which the route behavior actually has the helm to itself and can pull
+// the vessel back onto its line. One second of it would re-latch the
+// stem to a heading the S-turns had already displaced, and the route
+// would be given up a little further on every cycle.
+//
+// Free-running rather than gated on the profile: it costs two postings
+// a cycle, and BHV_ZigZag is the only subscriber to TGT_ZIG, so it has
+// no effect at all under any other profile.
+ProcessConfig = uTimerScript_ZigCycle
+{
+  AppTick   = 4
+  CommsTick = 4
+
+  reset_max  = unlimited
+  reset_time = $(TGT_ZIG_PERIOD=40)
+
+  event = var=TGT_ZIG, val=false, time=0
+  event = var=TGT_ZIG, val=true,  time=$(TGT_ZIG_GAP=15)
 }
 
 //--------------------------------------------------

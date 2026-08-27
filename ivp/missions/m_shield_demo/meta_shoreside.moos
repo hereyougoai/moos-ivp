@@ -95,6 +95,12 @@ ProcessConfig = pShare
   output = src_name=USV_XSPD,       dest_name=BLOCK_UPDATE, route=localhost:$(USV1_PSHARE=9201)
   output = src_name=USV_XSPD,       dest_name=BLOCK_UPDATE, route=localhost:$(USV2_PSHARE=9202)
   output = src_name=TGT_SPD_UPDATE, dest_name=TGT_WPT_UPDATE, route=localhost:$(TARGET_PSHARE=9203)
+
+  // Which kind of vessel the intruder behaves as (Action/Target Profile
+  // menu). Same direct-to-target route as the drawn path above: the
+  // behaviors that read it live in the target's own helm, so there is
+  // nothing for the mothership or the shoreside broker to do with it.
+  output = src_name=TGT_PROFILE,   route=localhost:$(TARGET_PSHARE=9203)
 }
 
 #include plugs.moos <uProcessWatch>
@@ -504,11 +510,38 @@ ProcessConfig = pMarineViewer
   // faster-than-us cases to see where the tactic holds and where it
   // breaks down, instead of hand-editing TGT_SPD in the mission file
   // and relaunching. 0.8 m/s is the launch-script default (TGT_SPD).
+  //
+  // All five entries are usable at the default ceiling (MAX_SPD=3.0 in
+  // launch_target.sh). A run launched with a lower ceiling
+  // (./launch.sh --tgt_max_spd=1.2, to reproduce numbers taken under the
+  // old default) clamps 1.4 and up to that ceiling instead.
   action = TGT_SPD_UPDATE = "speed=0.5" # menu_label = Target Speed/0.5 m/s - slow
   action = TGT_SPD_UPDATE = "speed=0.8" # menu_label = Target Speed/0.8 m/s (default)
   action = TGT_SPD_UPDATE = "speed=1.4" # menu_label = Target Speed/1.4 m/s - matches USV default
   action = TGT_SPD_UPDATE = "speed=2.0" # menu_label = Target Speed/2.0 m/s - same speed as a fast USV
   action = TGT_SPD_UPDATE = "speed=3.0" # menu_label = Target Speed/3.0 m/s - faster than any USV setting
+
+  // --- Target Profile ----------------------------------------------------
+  //
+  // What kind of vessel the intruder is behaving as. Every entry maps to
+  // a set of behaviors in meta_target.bhv gated on TGT_PROFILE; see the
+  // PROFILE CATALOG comment there for what each one is modelling and
+  // which baseline behaviors it switches off.
+  //
+  // Switching is live and takes effect on the target's next helm
+  // iteration -- no relaunch -- so a single run can walk through a
+  // compliant merchant, a runner, a vessel that will not leave, and a
+  // dead ship without ever stopping the fleet. Two of them are there
+  // specifically to show where the eviction loop's assumptions end:
+  // "loiterer" never departs, and "harasser" closes instead of fleeing.
+  action = TGT_PROFILE = evader    # menu_label = Target Profile/evader - uncooperative intruder, flees (default)
+  action = TGT_PROFILE = merchant  # menu_label = Target Profile/merchant - COLREGS-compliant, stands on
+  action = TGT_PROFILE = sprinter  # menu_label = Target Profile/sprinter - dashes when pressed
+  action = TGT_PROFILE = zigzag    # menu_label = Target Profile/zigzag - evasive S-turns along the route
+  action = TGT_PROFILE = lumbering # menu_label = Target Profile/lumbering - large hull, restricted in manoeuvre
+  action = TGT_PROFILE = loiterer  # menu_label = Target Profile/loiterer - orbits and refuses to leave
+  action = TGT_PROFILE = harasser  # menu_label = Target Profile/harasser - closes on the USVs instead of fleeing
+  action = TGT_PROFILE = dead_ship # menu_label = Target Profile/dead_ship - lost power, adrift, no avoidance
 
   // Engagement cycle readout from pTargetCoordinator on the mothership.
   scope = EVICT_BUFFER
@@ -517,6 +550,7 @@ ProcessConfig = pMarineViewer
   scope = USV_CRUISE_SPD
   scope = USV_XSPD
   scope = TGT_SPD_UPDATE
+  scope = TGT_PROFILE
   scope = SHIELD_STATE
   scope = SHIELD_DETECTIONS
   scope = SHIELD_EVICTIONS
