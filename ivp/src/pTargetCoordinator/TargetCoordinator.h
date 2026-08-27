@@ -55,7 +55,8 @@ class TargetCoordinator : public AppCastingMOOSApp
   void clearPincerVisuals();
 
   void   assignAndPostBlock();
-  bool   blockPoints(double& b1x, double& b1y,
+  bool   blockPoints(double lead1,
+		     double& b1x, double& b1y,
 		     double& b2x, double& b2y) const;
   bool   blockStillGood(double bx, double by) const;
   bool   blockSpent(double bx, double by) const;
@@ -64,6 +65,9 @@ class TargetCoordinator : public AppCastingMOOSApp
   double transitTime(unsigned int vidx, double bx, double by) const;
   bool   blockTransitHold(unsigned int slot) const;
   double feasibleLead() const;
+  double commitLead();
+  double targetCourse() const;
+  void   updateTargetCourse();
   double blockOffset() const;
   double currentBlockOffset() const;
   void   updateAdaptiveOffset();
@@ -176,6 +180,12 @@ class TargetCoordinator : public AppCastingMOOSApp
   bool                     m_block_feasible;      // shorten lead to reachable
   double                   m_block_usv_speed;     // fallback if report has none
 
+  // Station stability. The two symptoms these answer are "the point
+  // jumps" and "it moves again before the USV ever gets there".
+  double                   m_block_lead_margin;   // clearance above min_lead
+  double                   m_block_lead_hyst;     // metres before lead moves
+  double                   m_block_course_tau;    // secs, course smoothing
+
  protected: // State variables
   std::map<std::string, NodeRecord> m_records;
   bool         m_intercept_active;
@@ -223,11 +233,22 @@ class TargetCoordinator : public AppCastingMOOSApp
   std::vector<bool>         m_block_valid;
   std::vector<double>       m_block_utc;
   std::vector<bool>         m_block_giving_way;
+  std::vector<double>       m_block_budget;    // transit credit, latched
+  std::vector<double>       m_retreat_x;       // give-way point, latched
+  std::vector<double>       m_retreat_y;
   bool                      m_block_posted;
   int                       m_block_side;      // +1 starboard, -1 port
   double                    m_block_side_challenge_since; // -1 = none pending
   unsigned int              m_block_reissues;
   unsigned int              m_giveways;
+
+  // Lead in force, latched across re-issues. See commitLead().
+  double                    m_block_lead_cur;  // -1 = nothing latched
+
+  // Smoothed intruder course. See updateTargetCourse().
+  double                    m_tgt_course;
+  bool                      m_tgt_course_valid;
+  double                    m_tgt_course_utc;
 
   // Adaptive-offset state. See updateAdaptiveOffset().
   double                    m_block_offset_cur;   // -1 = not yet initialized

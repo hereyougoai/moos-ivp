@@ -141,6 +141,16 @@ TargetCoordinator::TargetCoordinator()
   m_block_feasible       = true;
   m_block_usv_speed      = 2.0;
 
+  // Station stability. See commitLead() and updateTargetCourse().
+  m_block_lead_margin    = 10;
+  m_block_lead_hyst      = 12;
+  m_block_course_tau     = 6;
+
+  m_block_lead_cur       = -1;
+  m_tgt_course           = 0;
+  m_tgt_course_valid     = false;
+  m_tgt_course_utc       = 0;
+
   m_block_posted       = false;
   m_block_side         = 1;
   m_block_side_challenge_since = -1;
@@ -338,6 +348,7 @@ bool TargetCoordinator::Iterate()
 {
   AppCastingMOOSApp::Iterate();
 
+  updateTargetCourse();
   updateExitDirection();
   updateEngagement();
 
@@ -473,6 +484,12 @@ bool TargetCoordinator::OnStartUp()
 	handled = setBooleanOnString(m_block_feasible, value);
       else if(param == "block_usv_speed")
 	handled = setPosDoubleOnString(m_block_usv_speed, value);
+      else if(param == "block_lead_margin")
+	handled = setNonNegDoubleOnString(m_block_lead_margin, value);
+      else if(param == "block_lead_hyst")
+	handled = setNonNegDoubleOnString(m_block_lead_hyst, value);
+      else if(param == "block_course_tau")
+	handled = setNonNegDoubleOnString(m_block_course_tau, value);
       else if(param == "cant_deg")
 	handled = setNonNegDoubleOnString(m_cant_deg, value);
       else if(param == "cant_dead_deg")
@@ -1467,6 +1484,122 @@ void TargetCoordinator::updateAdaptiveOffset()
 }
 
 //------------------------------------------------------------
+// Procedure: updateTargetCourse()
+//   Purpose: The COURSE the whole blocking geometry is built on --
+//            the intruder's heading put through a first-order lag.
+//
+//   WHY. Every number in blockPoints(), blockSpent(), blockOffTrack()
+//   and the block_side latch was taken from getHeading(), which is the
+//   intruder's INSTANTANEOUS heading: one helm iteration of its own
+//   rudder, its own COLREGs avoidance of our USVs, and whatever yaw the
+//   simulated actuator leaves. The station is projected block_lead
+//   metres along that heading, so a degree of yaw moves the point
+//   lead * tan(1 deg) ~ 0.9 m, and the 10-15 degree swings a target
+//   makes while it is being pushed move it 9-13 m sideways. That is a
+//   large fraction of the offset the whole scheme is trying to impose,
+//   and it is why the point visibly jumps.
+//
+//   Worse, it is not just cosmetic: blockOffTrack() measures the point
+//   against that same jittering line, so a yaw both MOVES the point we
+//   would issue and CONDEMNS the one already standing.
+//
+//   A lag of block_course_tau seconds keeps the real manoeuvre -- a
+//   substantial alteration takes many seconds and comes through nearly
+//   undamped -- while the yaw, which is what the raw signal is mostly
+//   made of, averages out. Filtered as a unit vector via angle180 so it
+//   crosses north correctly, and with dt taken from the clock rather
+//   than assumed, so an app tick change does not retune it.
+//
+//   tau = 0 restores the raw heading.
+
+void TargetCoordinator::updateTargetCourse()
+{
+  map<string, NodeRecord>::const_iterator t = m_records.find(m_target_name);
+  if(t == m_records.end()) {
+    m_tgt_course_valid = false;
+    return;
+  }
+
+  double raw = angle360(t->second.getHeading());
+  double now = MOOSTime();
+
+  if(!m_tgt_course_valid || (m_block_course_tau <= 0)) {
+    m_tgt_course       = raw;
+    m_tgt_course_valid = true;
+    m_tgt_course_utc   = now;
+    return;
+  }
+
+  double dt = now - m_tgt_course_utc;
+  m_tgt_course_utc = now;
+  if(dt <= 0)
+    return;
+
+  // Gap long enough that the filter state means nothing any more
+  // (contact lost and re-acquired): start clean rather than sweeping
+  // the station through a turn that already happened.
+  if(dt > (5.0 * m_block_course_tau)) {
+    m_tgt_course = raw;
+    return;
+  }
+
+  double alpha = 1.0 - exp(-dt / m_block_course_tau);
+  m_tgt_course = angle360(m_tgt_course + (alpha * angle180(raw - m_tgt_course)));
+}
+
+//------------------------------------------------------------
+// Procedure: targetCourse()
+//   Purpose: The filtered course, or the raw heading if the filter has
+//            not run yet. ONE source for every consumer -- a station
+//            projected on one heading and then judged stale against a
+//            different one retires itself for no reason.
+
+double TargetCoordinator::targetCourse() const
+{
+  if(m_tgt_course_valid)
+    return(m_tgt_course);
+
+  map<string, NodeRecord>::const_iterator t = m_records.find(m_target_name);
+  if(t == m_records.end())
+    return(0);
+  return(angle360(t->second.getHeading()));
+}
+
+//------------------------------------------------------------
+// Procedure: commitLead()
+//   Purpose: The lead actually used, latched between re-issues.
+//
+//   feasibleLead() is a function of where the blocker happens to BE:
+//   it walks the lead down until the USV can reach the station before
+//   the intruder draws level with it. That is the right test, but it
+//   means the answer improves continuously as the USV closes -- 25 m
+//   when it sets off, 45 m thirty seconds later -- so two consecutive
+//   re-issues taken from the same geometry land the point 20 m apart
+//   for no reason connected to the intruder at all. The station then
+//   jumps forward just as the USV is arriving, which is the second half
+//   of the reported symptom.
+//
+//   So the lead is held until the feasible answer has moved by
+//   block_lead_hyst. Small drifts are ignored; a real change -- the
+//   intruder speeding up, the blocker having to give way and start over
+//   -- still gets through.
+
+double TargetCoordinator::commitLead()
+{
+  double want = feasibleLead();
+
+  if(m_block_lead_cur < 0) {
+    m_block_lead_cur = want;
+    return(m_block_lead_cur);
+  }
+
+  if(fabs(want - m_block_lead_cur) >= m_block_lead_hyst)
+    m_block_lead_cur = want;
+
+  return(m_block_lead_cur);
+}
+
+//------------------------------------------------------------
 // Procedure: blockPoints()
 //   Purpose: Where the two USVs should be standing, in absolute
 //            coordinates, to make the intruder turn the way we want.
@@ -1492,7 +1625,8 @@ void TargetCoordinator::updateAdaptiveOffset()
 //            blocking the bow of a vessel that is already leaving would
 //            only turn it back in.
 
-bool TargetCoordinator::blockPoints(double& b1x, double& b1y,
+bool TargetCoordinator::blockPoints(double lead1,
+				    double& b1x, double& b1y,
 				    double& b2x, double& b2y) const
 {
   map<string, NodeRecord>::const_iterator t = m_records.find(m_target_name);
@@ -1502,15 +1636,18 @@ bool TargetCoordinator::blockPoints(double& b1x, double& b1y,
   double tx, ty;
   if(!recordPosition(t->second, tx, ty))
     return(false);
-  double hdg = angle360(t->second.getHeading());
+
+  // The FILTERED course, not the instantaneous heading -- see
+  // updateTargetCourse() for why the raw one moved this point around
+  // by a large fraction of the offset it is trying to impose.
+  double hdg = targetCourse();
 
   bool blocking = false;
   if(m_exit_valid)
     blocking = (fabs(angle180(m_exit_dir - hdg)) >= m_block_dead_deg);
 
-  // Not block_lead: the largest lead the blocker can actually reach in
-  // time. See feasibleLead().
-  double lead1 = feasibleLead();
+  // lead1 is the committed lead handed in by the caller -- neither
+  // block_lead nor a fresh feasibleLead(). See commitLead().
   double lead2 = lead1 * m_block_lead2;
   double fx, fy;
 
@@ -1572,7 +1709,7 @@ bool TargetCoordinator::blockSpent(double bx, double by) const
   double tx, ty;
   if(!recordPosition(t->second, tx, ty))
     return(true);
-  double hdg  = angle360(t->second.getHeading());
+  double hdg  = targetCourse();
   double rads = degToRadians(hdg);
 
   double dx = bx - tx;
@@ -1599,7 +1736,7 @@ bool TargetCoordinator::blockOffTrack(double bx, double by) const
   double tx, ty;
   if(!recordPosition(t->second, tx, ty))
     return(true);
-  double hdg  = angle360(t->second.getHeading());
+  double hdg  = targetCourse();
   double rads = degToRadians(hdg);
 
   double dx = bx - tx;
@@ -1688,6 +1825,8 @@ bool TargetCoordinator::blockTransitHold(unsigned int slot) const
     return(false);
   if(slot >= m_block_valid.size() || !m_block_valid[slot])
     return(false);
+  if(slot >= m_block_budget.size())
+    return(false);
 
   unsigned int n = m_vnames.size();
   unsigned int vidx = (m_assignment.size() == n) ? m_assignment[slot] : slot;
@@ -1708,7 +1847,17 @@ bool TargetCoordinator::blockTransitHold(unsigned int slot) const
   if(distPointToPoint(vx, vy, bx, by) < m_block_min_offset)
     return(false);
 
-  double budget = m_block_transit_frac * transitTime(vidx, bx, by);
+  // THE BUDGET IS THE ONE LATCHED WHEN THE POINT WAS ISSUED, not a
+  // fresh estimate. Re-measuring it here was self-defeating and is the
+  // direct cause of "the point changes before the USV ever arrives":
+  // the estimate is transitTime from where the USV is NOW, so it falls
+  // as the USV closes while the elapsed time it is compared against
+  // rises. With block_transit_frac = 1.0 the two meet at the halfway
+  // point of the journey -- so EVERY off-track station was guaranteed
+  // to be torn up at roughly 50 percent of its transit, no matter how
+  // well the vehicle was doing. The credit has to be the size of the
+  // job as it was accepted; spending it does not shrink it.
+  double budget = m_block_budget[slot];
   if(budget > m_block_transit_cap)
     budget = m_block_transit_cap;
 
@@ -1736,6 +1885,21 @@ bool TargetCoordinator::blockTransitHold(unsigned int slot) const
 
 double TargetCoordinator::feasibleLead() const
 {
+  // The floor is block_min_lead PLUS a margin, and the margin is not
+  // decoration. block_min_lead is the along-track distance at which
+  // blockSpent() declares a point dead, so a point issued AT that
+  // distance is spent the instant it is issued: the next pass retires
+  // it, block_interval seconds later a new one is issued at the same
+  // unreachable floor, and the fleet sits in a 5-second thrash loop
+  // producing stations that never had a chance to work. That loop is
+  // exactly what an operator sees as "the prediction jumps constantly
+  // and nothing ever gets evicted". Below the floor the honest answer
+  // is "the blocker cannot make this intercept", and the point is
+  // issued with enough life in it to be worth transiting to.
+  double floor_lead = m_block_min_lead + m_block_lead_margin;
+  if(floor_lead > m_block_lead)
+    floor_lead = m_block_lead;
+
   if(!m_block_feasible)
     return(m_block_lead);
 
@@ -1750,7 +1914,9 @@ double TargetCoordinator::feasibleLead() const
   double tx, ty;
   if(!recordPosition(t->second, tx, ty))
     return(m_block_lead);
-  double hdg = angle360(t->second.getHeading());
+
+  // Same course the station will actually be projected on.
+  double hdg = targetCourse();
 
   double tspd = t->second.getSpeed();
   if(tspd < 0.1)
@@ -1762,16 +1928,21 @@ double TargetCoordinator::feasibleLead() const
 
   double side_ang = angle360(hdg + (90.0 * m_block_side));
 
-  for(double lead=m_block_lead; lead>=m_block_min_lead; lead-=5.0) {
+  for(double lead=m_block_lead; lead>=floor_lead; lead-=5.0) {
     double fx, fy, bx, by;
     projectPoint(hdg, lead, tx, ty, fx, fy);
     projectPoint(side_ang, currentBlockOffset(), fx, fy, bx, by);
 
-    if(transitTime(vidx, bx, by) <= (lead / tspd))
+    // The intruder needs lead/tspd seconds to draw level with the
+    // point; the blocker must be there BEFORE that, not exactly on it,
+    // or it arrives as the intruder passes and blocks nothing. The
+    // margin is the same one the floor is built from, in seconds.
+    double slack = m_block_lead_margin / tspd;
+    if(transitTime(vidx, bx, by) <= ((lead / tspd) - slack))
       return(lead);
   }
 
-  return(m_block_min_lead);
+  return(floor_lead);
 }
 
 //------------------------------------------------------------
@@ -1814,6 +1985,9 @@ void TargetCoordinator::assignAndPostBlock()
     m_block_valid.assign(n, false);
     m_block_utc.assign(n, 0);
     m_block_giving_way.assign(n, false);
+    m_block_budget.assign(n, 0);
+    m_retreat_x.assign(n, 0);
+    m_retreat_y.assign(n, 0);
   }
 
   // Which side are we standing on? LATCHED the same way the exit
@@ -1834,7 +2008,12 @@ void TargetCoordinator::assignAndPostBlock()
   // the tactical one.
   map<string, NodeRecord>::const_iterator t = m_records.find(m_target_name);
   if((t != m_records.end()) && m_exit_valid) {
-    double delta = angle180(m_exit_dir - angle360(t->second.getHeading()));
+    // targetCourse(), not getHeading(): the commit timer below was
+    // being fed a signal whose yaw crosses the exit bearing several
+    // times a minute on its own, so it spent its life counting up and
+    // being reset. Latching a filtered signal is what makes the latch
+    // mean something.
+    double delta = angle180(m_exit_dir - targetCourse());
     int wanted = (delta >= 0) ? -1 : 1;
     if((fabs(delta) >= m_block_dead_deg) && (wanted != m_block_side)) {
       if(m_block_side_challenge_since < 0)
@@ -1897,6 +2076,17 @@ void TargetCoordinator::assignAndPostBlock()
       if(m_block_giving_way[slot]) {
 	m_block_giving_way[slot] = false;
 	Notify("BLOCK_GIVEWAY_" + toupper(m_vnames[vidx]), "false");
+
+	// The adaptive-offset baseline stopped being updated the moment
+	// this vehicle began giving way (see the call site below), so it
+	// is now as old as the give-way lasted -- and its wait timer has
+	// long since expired. Left alone, the first pass after the block
+	// resumes shrinks the offset for a "no reaction" that was never
+	// tested. Re-baseline on the way back in.
+	if((slot == 0) && (t != m_records.end())) {
+	  m_block_reaction_hdg = angle360(t->second.getHeading());
+	  m_block_reaction_utc = MOOSTime();
+	}
       }
       continue;
     }
@@ -1905,20 +2095,38 @@ void TargetCoordinator::assignAndPostBlock()
       m_block_giving_way[slot] = true;
       m_block_valid[slot]      = false;   // this point is finished
       m_giveways++;
+
+      // Retreat point: straight out from the intruder along the bearing
+      // the USV is already on, so the turn away is the shortest one.
+      //
+      // LATCHED AT ONSET, and this matters. It used to be recomputed
+      // from both vehicles' live positions every iteration and re-sent
+      // every iteration, so the station-keeping behavior was chasing a
+      // point that moved as fast as the two of them did -- the USV
+      // never converged on it, and the give-way took longer than it
+      // should have. A fixed point astern of the bearing of first
+      // approach is one clean turn out.
+      double away = angle360(relAng(tx, ty, vx, vy));
+      projectPoint(away, m_block_abort + m_block_rearm, tx, ty,
+		   m_retreat_x[slot], m_retreat_y[slot]);
+      m_block_utc[slot] = 0;   // force the post below
+
       Notify("BLOCK_GIVEWAY_" + toupper(m_vnames[vidx]), "true");
       reportEvent("Giving way: " + m_vnames[vidx] + " at " +
 		  doubleToStringX(range,1) + " m of the intruder - block released.");
     }
 
-    // Retreat point: straight out from the intruder along the bearing
-    // the USV is already on, so the turn away is the shortest one.
-    double away = angle360(relAng(tx, ty, vx, vy));
-    double rx, ry;
-    projectPoint(away, m_block_abort + m_block_rearm, tx, ty, rx, ry);
+    // Heartbeat only -- the point itself does not change. m_block_utc
+    // is free to time this: the slot is invalid, so nothing else is
+    // reading it while the give-way runs.
+    if((MOOSTime() - m_block_utc[slot]) <= m_repost_interval)
+      continue;
+    m_block_utc[slot] = MOOSTime();
 
     string vname = toupper(m_vnames[vidx]);
     Notify("BLOCK_UPDATE_" + vname, "station_pt=" +
-	   doubleToStringX(rx,1) + "," + doubleToStringX(ry,1));
+	   doubleToStringX(m_retreat_x[slot],1) + "," +
+	   doubleToStringX(m_retreat_y[slot],1));
     Notify("BLOCK_ACTIVE_" + vname, "true");
   }
 
@@ -1937,7 +2145,12 @@ void TargetCoordinator::assignAndPostBlock()
     else if(blockOffTrack(m_block_x[0], m_block_y[0]) && !blockTransitHold(0))
       reissue = true;
   }
-  if(reissue && have && ((MOOSTime() - m_block_utc[0]) < m_block_interval))
+  // Rate limit, and it applies whether the point died of geometry or
+  // was invalidated from elsewhere (an offset shrink, a give-way that
+  // has just ended). The "have" qualifier used to exempt exactly those
+  // invalidations, which are the ones that arrive in bursts -- so the
+  // floor on re-issue rate was missing precisely where it was needed.
+  if(reissue && ((MOOSTime() - m_block_utc[0]) < m_block_interval))
     reissue = false;
 
   // While the blocker is giving way there is no formation to re-issue:
@@ -1947,8 +2160,12 @@ void TargetCoordinator::assignAndPostBlock()
     reissue = false;
 
   if(reissue) {
+    // One lead for this issue, latched against the blocker's own
+    // closing motion. See commitLead().
+    double lead1 = commitLead();
+
     double b1x, b1y, b2x, b2y;
-    if(!blockPoints(b1x, b1y, b2x, b2y))
+    if(!blockPoints(lead1, b1x, b1y, b2x, b2y))
       return;
 
     // Pair the USVs to the two stations by which is closer, then leave
@@ -1987,9 +2204,19 @@ void TargetCoordinator::assignAndPostBlock()
       m_block_x[1] = b2x;
       m_block_y[1] = b2y;
     }
+    // Latch each slot's transit credit NOW, against the journey as it
+    // is being handed out. See blockTransitHold().
     for(unsigned int i=0; i<n; i++) {
       m_block_valid[i] = true;
       m_block_utc[i]   = MOOSTime();
+
+      unsigned int vidx = (m_assignment.size() == n) ? m_assignment[i] : i;
+      double budget = 0;
+      if(vidx < n)
+	budget = m_block_transit_frac * transitTime(vidx, m_block_x[i], m_block_y[i]);
+      if(budget > m_block_transit_cap)
+	budget = m_block_transit_cap;
+      m_block_budget[i] = budget;
     }
     m_block_reissues++;
   }
@@ -2101,6 +2328,7 @@ void TargetCoordinator::standDownBlock()
 
   m_block_posted = false;
   m_block_side_challenge_since = -1;
+  m_block_lead_cur = -1;
   resetAdaptiveOffset();
   clearBlockVisuals();
 }
@@ -2885,14 +3113,24 @@ bool TargetCoordinator::buildReport()
 	   << " m of " << doubleToStringX(blockOffset(),0) << " m ceiling"
 	   << (m_block_reacted ? "  [reaction confirmed]" : "  [still feeling it out]")
 	   << ", give way inside " << doubleToStringX(m_block_abort,0) << " m" << endl;
-    m_msgs << "  Block Lead:         " << doubleToStringX(feasibleLead(),0)
-	   << " m of " << doubleToStringX(m_block_lead,0)
-	   << " m wanted   (walked down to what the blocker can reach in time)"
+    m_msgs << "  Block Lead:         "
+	   << ((m_block_lead_cur < 0) ? string("-")
+	                             : doubleToStringX(m_block_lead_cur,0))
+	   << " m held, " << doubleToStringX(feasibleLead(),0)
+	   << " m feasible, " << doubleToStringX(m_block_lead,0)
+	   << " m wanted   (held until the feasible answer moves "
+	   << doubleToStringX(m_block_lead_hyst,0) << " m)"
 	   << endl;
+    m_msgs << "  Intruder Course:    " << doubleToStringX(targetCourse(),0)
+	   << " deg smoothed over " << doubleToStringX(m_block_course_tau,0)
+	   << " s   (raw heading is what used to move the station)" << endl;
+
     if(m_block_commit_transit && (m_block_valid.size() > 0) && m_block_valid[0]) {
       unsigned int vidx = (m_assignment.size() == m_vnames.size())
 	? m_assignment[0] : 0;
-      m_msgs << "  Blocker Transit:    needs "
+      m_msgs << "  Blocker Transit:    budget "
+	     << doubleToStringX((m_block_budget.size() > 0) ? m_block_budget[0] : 0, 0)
+	     << " s, still needs "
 	     << doubleToStringX(transitTime(vidx, m_block_x[0], m_block_y[0]),0)
 	     << " s to reach station, held for "
 	     << doubleToStringX(MOOSTime() - m_block_utc[0],0) << " s"

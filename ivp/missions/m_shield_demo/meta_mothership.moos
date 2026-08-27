@@ -609,6 +609,40 @@ ProcessConfig = pTargetCoordinator
   block_feasible       = true
   block_usv_speed      = 2.0
 
+  // STATION STABILITY -- the three settings that answer "the point
+  // jumps" and "it moves again before the USV ever gets there".
+  //
+  // block_course_tau   The station is projected block_lead metres along
+  //   the intruder's course, so one degree of yaw slides it about 0.9 m
+  //   sideways and the 10-15 degree swings a target makes while it is
+  //   being pushed slide it 9-13 m -- most of the offset the scheme is
+  //   trying to impose. Worse, blockOffTrack() judges the STANDING
+  //   point against that same jittering line, so a yaw both moves the
+  //   next point and condemns the current one. A first-order lag of
+  //   this many seconds passes a real alteration (which takes tens of
+  //   seconds) almost undamped and averages the yaw away. 0 = raw
+  //   heading, the old behaviour.
+  //
+  // block_lead_margin  Clearance between the lead a point is issued at
+  //   and block_min_lead, the along-track distance at which it is
+  //   declared spent. These used to be the same number: when nothing
+  //   was reachable, feasibleLead() returned block_min_lead and the
+  //   point was spent the instant it was born -- retired next pass,
+  //   re-issued block_interval later at the same dead distance, for as
+  //   long as the geometry stayed hard. It also buys the blocker this
+  //   many metres worth of seconds to be ON station before the intruder
+  //   draws level, rather than arriving exactly as it passes.
+  //
+  // block_lead_hyst    feasibleLead() is a function of where the
+  //   blocker IS, so its answer improves continuously as the USV closes
+  //   -- 25 m when it sets off, 45 m half a minute later. Two re-issues
+  //   from otherwise identical geometry then land the point 20 m apart
+  //   for reasons having nothing to do with the intruder. The lead is
+  //   held until the feasible answer moves by this much.
+  block_course_tau   = 6
+  block_lead_margin  = 10
+  block_lead_hyst    = 12
+
   // GIVING WAY. block_offset is the distance the intruder passes at
   // while it keeps to the track we measured it on. An intruder that
   // turns INTO the station instead closes on a vehicle that is, by
