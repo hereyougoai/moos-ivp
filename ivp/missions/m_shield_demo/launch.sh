@@ -35,6 +35,8 @@ NOGUI=""
 
 # Custom
 TGT_SPD=""
+TGT_PROFILE=""
+TGT_MAX_SPD=""
 
 #------------------------------------------------------------
 #  Part 3: Check for and handle command-line arguments
@@ -52,6 +54,16 @@ for ARGI; do
 	echo "  --amt=N            Num vehicles to launch    "
 	echo "  --rand, -r         Rand vehicle positions    "
 	echo "  --max_spd=N        Max helm/sim speed        "
+	echo "  --tgt_profile=<p>  Intruder behavior profile:"
+	echo "                     evader (default), merchant,"
+	echo "                     sprinter, zigzag, lumbering,"
+	echo "                     loiterer, harasser, dead_ship"
+	echo "  --tgt_max_spd=N    Intruder speed ceiling      "
+	echo "                     (default 3.0). Only caps   "
+	echo "                     top speed during a hard     "
+	echo "                     push (evasion, sprinter);  "
+	echo "                     lower it to reproduce runs "
+	echo "                     taken under the old 1.2.   "
         echo "  --mmod=<mod>       Mission variation/mod     "
 	echo "                                               "
 	echo "Options (monte):                               "
@@ -90,6 +102,10 @@ for ARGI; do
 	TGT_SPD="${ARGI#--spd=*}"
     elif [ "${ARGI:0:10}" = "--tgt_spd=" ]; then
 	TGT_SPD="${ARGI#--tgt_spd=*}"
+    elif [ "${ARGI:0:14}" = "--tgt_profile=" ]; then
+	TGT_PROFILE="${ARGI#--tgt_profile=*}"
+    elif [ "${ARGI:0:14}" = "--tgt_max_spd=" ]; then
+	TGT_MAX_SPD="${ARGI#--tgt_max_spd=*}"
     elif [ "${ARGI}" = "--fast" -o "${ARGI}" = "-f" ]; then
 	FAST=$ARGI
     else 
@@ -170,6 +186,12 @@ TARGS+=" $TIME_WARP $JUST_MAKE $VERBOSE "
 TARGS+=" $MMOD "
 if [ "$TGT_SPD" != "" ]; then
     TARGS+=" --spd=$TGT_SPD "
+fi
+if [ "$TGT_PROFILE" != "" ]; then
+    TARGS+=" --profile=$TGT_PROFILE "
+fi
+if [ "$TGT_MAX_SPD" != "" ]; then
+    TARGS+=" --max_spd=$TGT_MAX_SPD "
 fi
 vecho "Launching target: $TARGS"
 ./launch_target.sh $TARGS

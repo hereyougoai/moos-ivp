@@ -34,10 +34,37 @@ START_POS="x=90,y=-140,heading=0"
 # interceptors can close from any part of the field and then hold
 # their pincer stations through the target's evasive turns.
 TGT_SPD="0.8"
-MAX_SPD="1.2"
+# Ceiling of the helm's speed domain AND of uSimMarine, NOT the patrol
+# speed -- the vessel still cruises at TGT_SPD.
+#
+# uSimMarine's max_speed is a hard clamp applied to the final reported
+# NAV_SPEED (see USM_MOOSApp.cpp: "if new_speed > m_max_speed, clamp").
+# It is NOT the gain in the thrust-to-speed mapping -- that is a fixed
+# thrust_factor (20), set independently of this value. So raising this
+# ceiling does not change how the vessel behaves at any speed below it;
+# measured on the patrol loop at full settle, commanding 0.78 m/s
+# converges to ~0.70-0.77 m/s whether the ceiling is 1.2 or 3.0 -- the
+# difference is noise from where in the patrol corner the sample landed,
+# not from the ceiling.
+#
+# What the ceiling DOES change is the top speed reachable during a hard
+# push -- evasion under BHV_AvoidCollision, or the "sprinter" profile's
+# dash -- and the logged runs show the target riding this ceiling during
+# evasion at the old value of 1.2. Set here at 3.0 so that regime is not
+# artificially capped and so the shoreside Action/Target Speed menu's
+# 1.4 / 2.0 / 3.0 entries (and the sprinter profile) all have room to
+# actually go faster. Lower it with --max_spd for a run that needs to
+# reproduce numbers taken under the old 1.2 ceiling.
+MAX_SPD="3.0"
 TGT_HOME="90,-200"
 # Patrol loop that crosses both survey lanes
 TGT_PATROL="30,-120:150,-120:150,-40:30,-40"
+# Which kind of vessel the intruder behaves as. See the PROFILE CATALOG
+# in meta_target.bhv. The operator can switch this live from the
+# shoreside Action/Target Profile menu; this is only the startup value.
+#   evader | merchant | sprinter | zigzag | lumbering | loiterer |
+#   harasser | dead_ship
+TGT_PROFILE="evader"
 
 #------------------------------------------------------------
 #  Part 3: Check for and handle command-line arguments
@@ -61,6 +88,19 @@ for ARGI; do
 	echo "  --color=<orange>       Target vessel color   "
 	echo "  --start_pos=<..>       Target start position "
 	echo "  --spd=<0.8>            Target patrol speed   "
+	echo "  --max_spd=<1.2>        Helm/sim speed ceiling."
+	echo "                         Raise for the sprinter"
+	echo "                         profile and the GUI's "
+	echo "                         faster speed choices; "
+	echo "                         changes the tuned      "
+	echo "                         dynamics, see script.  "
+	echo "  --profile=<evader>     Target behavior profile:"
+	echo "                         evader, merchant,     "
+	echo "                         sprinter, zigzag,     "
+	echo "                         lumbering, loiterer,  "
+	echo "                         harasser, dead_ship   "
+	echo "                         (operator can switch  "
+	echo "                          it live in the GUI)  "
 	echo "  --patrol=<x,y:x,y:..>  Starting patrol route "
 	echo "                         (operator can redraw  "
 	echo "                          it live in the GUI)  "
@@ -90,6 +130,10 @@ for ARGI; do
         START_POS="${ARGI#--start_pos=*}"
     elif [ "${ARGI:0:6}" = "--spd=" ]; then
         TGT_SPD="${ARGI#--spd=*}"
+    elif [ "${ARGI:0:10}" = "--max_spd=" ]; then
+        MAX_SPD="${ARGI#--max_spd=*}"
+    elif [ "${ARGI:0:10}" = "--profile=" ]; then
+        TGT_PROFILE="${ARGI#--profile=*}"
     elif [ "${ARGI:0:9}" = "--patrol=" ]; then
         TGT_PATROL="${ARGI#--patrol=*}"
     elif [ "${ARGI:0:7}" = "--mmod=" ]; then
@@ -115,7 +159,9 @@ if [ "${VERBOSE}" = "yes" ]; then
     echo "VNAME =         [${VNAME}]        "
     echo "START_POS =     [${START_POS}]    "
     echo "TGT_SPD =       [${TGT_SPD}]      "
+    echo "MAX_SPD =       [${MAX_SPD}]      "
     echo "TGT_PATROL =    [${TGT_PATROL}]   "
+    echo "TGT_PROFILE =   [${TGT_PROFILE}]  "
     echo -n "Hit any key to continue launch "
     read ANSWER
 fi
@@ -139,6 +185,7 @@ nsplug meta_target.moos targ_$VNAME.moos $NSFLAGS WARP=$TIME_WARP \
 nsplug meta_target.bhv targ_$VNAME.bhv $NSFLAGS \
        VNAME=$VNAME                 TGT_SPD=$TGT_SPD   \
        TGT_PATROL=$TGT_PATROL       TGT_HOME=$TGT_HOME \
+       TGT_PROFILE=$TGT_PROFILE     MAX_SPD=$MAX_SPD   \
        MMOD=$MMOD
 
 if [ "${JUST_MAKE}" = "yes" ]; then
