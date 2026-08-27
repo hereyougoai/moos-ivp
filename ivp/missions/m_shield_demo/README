@@ -232,6 +232,87 @@ MOOS 社群架構:
   目前值可在 shoreside 的 scope 欄看 EVICT_BUFFER，母船 appcast 的
   "Exit Buffer" 那行也會一起顯示。
 
+目標船行為模式 (Action > Target Profile，任務進行中隨時可切換):
+
+  目標船原本只有一種行為: 固定巡邏航線 + 高權重 CPA 避碰，被逼近就
+  反射式逃開。那是「不合作入侵者」這一種船，不是所有船。Profile 讓
+  同一次執行裡可以換成別種船，不必重啟任何社群 — 選單送出 TGT_PROFILE，
+  由 shoreside 的 pShare 直送 9203，目標船 helm 下一個 iteration 生效。
+
+    evader     (預設) 不合作入侵者，反射式逃離。就是原本的行為。
+    merchant   守規矩的商船/漁船。改用 BHV_AvdColregsV22 (Rule 13/14/
+               15/17)，並關掉 CPA 避碰 — 兩種避碰模型同時對同一個接觸
+               作用會產生互相打架的轉向。它會在規則要求直航時直航，
+               所以包夾的其中一半會失去壓迫效果 (這正是 meta_target.bhv
+               開頭那段註解描述的情況)。
+    sprinter   被逼近就衝刺的快艇。CONTACT_CLOSEST_RANGE 進到 50m 內
+               才開油門，衝到 helm 速度域上限 (MAX_SPD)。預設上限 1.2
+               對 0.8 巡航速度已是 1.5 倍的可見加速; 要更誇張就用
+               ./launch.sh --tgt_max_spd=3.0。
+    zigzag     沿航線做 S 形規避的逃逸船。
+    lumbering  操縱能力受限的大船 (BHV_MemoryTurnLimit)。它做不出
+               evader 那種急轉，包夾面對的是慢、可預測、慣性大的目標。
+    loiterer   賴著不走的入侵者 (非法捕撈、蓄意佔位)。切換當下的位置
+               就是它的繞圈中心 (center_activate)，巡邏航線關掉，但
+               避碰留著 — 它會閃開然後回來。
+    harasser   灰色地帶的擠靠。目標反過來朝最近的子船逼近 (BHV_CutRange，
+               pwt 150)，而 CPA 避碰以 pwt 250 留在上面當安全下限，
+               所以是「擠而不撞」。把 CutRange 的權重調到 250 以上會
+               變成真的相撞。
+    dead_ship  失去動力。推進命令歸零、避碰完全關閉，漂到停止。子船
+               要面對一個完全不回應的接觸。
+
+  loiterer 與 harasser 是刻意放進來打 pTargetCoordinator 的假設的:
+  驅逐閉環預設「持續壓迫 → 目標終究會離開」。loiterer 永遠不離境，
+  harasser 是朝子船來而不是朝外走 — 兩者都不會讓 SHIELD_EVICTIONS 收斂。
+  用它們可以看出閉環在什麼情況下不會結束。
+
+  啟動時的預設值可用 ./launch.sh --tgt_profile=<name> 指定; 選單只是
+  改執行中的值。
+
+  實作上的兩個坑:
+
+  1) 三個 templated 行為 (target_avd_ / target_col_ / target_cut_) 各自
+     用「不同的」contact manager 警報變數。templated 行為是在 update
+     變數送達時生成的 — 生成時不看 condition — 而實例名稱取自警報的
+     name= 欄位。兩個 template 掛同一個警報就會搶同一個名字，第二個
+     生成被靜默丟棄，對應的 profile 就永遠不會跑。
+
+  2) BHV_ZigZag 要真的 S 形擺盪，比看起來難調，三個參數缺一不可:
+
+     a. stem 航向只在 idle->run 那一刻鎖定一次，之後不再更新。掛在
+        巡邏迴圈上，過第一個轉角它就在對一個過期的方位做 S 形。
+        meta_target.moos 的 uTimerScript_ZigCycle 每 40 秒把 TGT_ZIG
+        放掉 15 秒，強迫 run->idle->run 重新鎖定當下航向。
+
+     b. 它要「實際轉到請求的航向、誤差在 hdg_thresh 內」才算完成一個
+        leg、才會翻到另一邊。權重跟巡邏同級或更低時合成航向永遠到不了,
+        leg 計數不前進，行為就卡在第一個 zig — 輸出的是一個固定的航向
+        偏移，不是擺盪。實測 pwt 70 與 100 都是這個結果: 船維持一個偏
+        掉的航向，每次 re-sync 往同一邊再偏一次，270 -> 245 -> 219 ->
+        190 度單向盤旋。單獨放寬 hdg_thresh 或加大 max_zig_legs 都救
+        不了。
+
+     c. 因此 pwt 取 200 (高於巡邏的 100)。實測指令航向會在 ±35 度兩側
+        確實翻邊 (266 -> 335 -> 246 -> 315 -> 220 -> 291)。代價是航線
+        變成建議: 整個 cycle 都讓它跑會超過航點約 20m。上面那 15 秒的
+        空檔就是買回來的航線權 — 那段時間只有巡邏行為在操舵。
+
+     這個 profile 是「沿航線大致前進但不好預測」，不是精準循跡; 若要它
+     嚴格貼著航線，就得改用比 BHV_ZigZag 更受控的做法。
+
+  目標船速度上限 (MAX_SPD) 預設 3.0。這個值只是 uSimMarine 對 NAV_SPEED
+  的硬夾限 (原始碼 USM_MOOSApp.cpp: 超過就 clamp)，跟推力對速度的增益
+  是兩回事 — 增益是獨立寫死的常數，不受這個值影響。做過嚴謹的完整穩態
+  對照測試: 同樣指令 0.78 m/s，上限 1.2 與 3.0 下穩態實速都在 0.70~0.77
+  之間，差異在雜訊範圍內，不是上限造成的。(先前文件寫過「調高上限會動到
+  巡航動力學」，是舊測試取樣時船還沒穩定就當成穩態值的誤判，已更正。)
+
+  這個上限真正影響的只有「用力衝」時能衝多快 — 被包夾逼近時的閃避、或
+  sprinter 的衝刺 — 既有實跑 log 顯示目標曾貼著舊值 1.2 的上限跑。要
+  重現舊上限下的數字用 --tgt_max_spd=1.2。Action > Target Speed 選單的
+  1.4/2.0/3.0 幾項在預設上限下都能正常生效。
+
 自動接戰循環 (pTargetCoordinator，無需操作員介入):
 
   SEARCHING  子船跑自己的掃描方式。目標船進入任務區、而且進到任一

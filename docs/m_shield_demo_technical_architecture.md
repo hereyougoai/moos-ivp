@@ -50,7 +50,7 @@ graph TD
 | [meta_shoreside.moos](file:///l:/home/yoei/moos-ivp/ivp/missions/m_shield_demo/meta_shoreside.moos) | **岸端總控中心**：<br>1. 整合全量按鈕與下拉選單（DEPLOY, RETURN, SURVEY, INTERCEPT, PAT:*, SEE:* 等）。<br>2. 運行 uTimerScript_Heartbeat 每 2 秒廣播一次心跳包。<br>3. 監控全域變數看板（SHIELD_STATE, SHIELD_EVICTIONS）。 |
 | [meta_mothership.moos](file:///l:/home/yoei/moos-ivp/ivp/missions/m_shield_demo/meta_mothership.moos) | **母船中樞**：<br>1. 運行 pRegionDivider 與 pTargetCoordinator。<br>2. 設定 pShare 將分區航線與夾擊站位**直接推送**至各子船社群。 |
 | [meta_vehicle.moos](file:///l:/home/yoei/moos-ivp/ivp/missions/m_shield_demo/meta_vehicle.moos)<br>[meta_vehicle.bhv](file:///l:/home/yoei/moos-ivp/ivp/missions/m_shield_demo/meta_vehicle.bhv) | **子船 (abe, ben) 配置與行為樹**：<br>1. 5 層模式狀態機：STATION-KEEPING > RETURNING > INTERCEPTING > SURVEYING > LOITERING。<br>2. 配置兩組獨立的 BHV_AvdColregsV22：一組針對隊友（45m 警戒），一組針對目標（22m 警戒，低於 25m 包夾站位，避免自我排斥）。<br>3. 航向 PID 控制器調優： = 0$（消除積分飽和過衝）， = 0.3$（平抑追逐轉向時的舵鋸齒）。 |
-| [meta_target.moos](file:///l:/home/yoei/moos-ivp/ivp/missions/m_shield_demo/meta_target.moos)<br>[meta_target.bhv](file:///l:/home/yoei/moos-ivp/ivp/missions/m_shield_demo/meta_target.bhv) | **目標船 (target) 配置與行為樹**：<br>1. 運行 pTargetPathPlanner 支援自訂入侵航線。<br>2. 配置高權重 BHV_AvoidCollision（ = 250$，高於巡邏  = 100$，警戒半徑 55m/25m），受子船雙側逼近時被迫轉向逃離。 |
+| [meta_target.moos](file:///l:/home/yoei/moos-ivp/ivp/missions/m_shield_demo/meta_target.moos)<br>[meta_target.bhv](file:///l:/home/yoei/moos-ivp/ivp/missions/m_shield_demo/meta_target.bhv) | **目標船 (target) 配置與行為樹**：<br>1. 運行 pTargetPathPlanner 支援自訂入侵航線。<br>2. 配置高權重 BHV_AvoidCollision（ = 250$，高於巡邏  = 100$，警戒半徑 55m/25m），受子船雙側逼近時被迫轉向逃離。<br>3. **行為模式（Target Profile）**：以 TGT_PROFILE 閘控的 8 種船種人格（evader / merchant / sprinter / zigzag / lumbering / loiterer / harasser / dead_ship），可於任務進行中即時切換，詳見下節。 |
 | [launch.sh](file:///l:/home/yoei/moos-ivp/ivp/missions/m_shield_demo/launch.sh) 等啟動腳本 | **自動化多社群啟動腳本**：一鍵循序啟動 5 個獨立 MOOSDB 與 App 實例（Abe: 9001/9201, Ben: 9002/9202, Target: 9003/9203, Mothership: 9005/9205, Shoreside: 9000/9200）。 |
 
 ---
@@ -122,6 +122,69 @@ stateDiagram-v2
 * **為什麼不能僅憑「脫離感測範圍（Contact Lost）」判定驅逐成功？**
   若以失去感測為脫離條件，當目標船在任務區內部因避碰微幅轉向而短暫脫離感測圈時，子船會立即解除攔截，目標便能趁機再次深入防區。因此系統要求：**必須同時滿足「目標位於任務區外（含 buffer）」且「持續達 
 elease_hold 秒（預設 8 秒）」**，才算真正驅逐成功。
+
+---
+
+### 5. 目標船行為模式（Target Profile）：入侵者的多樣化情境模擬
+
+原始的目標船只有單一行為模型：固定巡邏航線（BHV_Waypoint, $pwt = 100$）疊加高權重反射式避碰（BHV_AvoidCollision, $pwt = 250$）。這模擬的是「不合作入侵者」這**一種**船，而防衛系統實際會遇到的水面接觸並不只有這一種。
+
+TGT_PROFILE 機制以 Helm 的 `condition` 閘控一組行為，讓同一次執行中可以切換船種人格，**無須重啟任何 MOOS 社群**：岸端 `Action > Target Profile` 選單發布 TGT_PROFILE，經 pShare 直送 9203，目標船 Helm 於下一個 iteration 生效。
+
+| Profile | 模擬情境 | 核心行為 | 關閉的基線行為 |
+| :--- | :--- | :--- | :--- |
+| `evader` | 不合作入侵者，反射式逃離（預設） | 基線 BHV_AvoidCollision | — |
+| `merchant` | COLREGS 合規商船／漁船 | BHV_AvdColregsV22 ($pwt=250$) | BHV_AvoidCollision |
+| `sprinter` | 被逼近即衝刺的快艇 | BHV_ConstantSpeed ($pwt=400$)，閘門 CONTACT_CLOSEST_RANGE < 50 m | — |
+| `zigzag` | 沿航線 S 形規避的逃逸船 | BHV_ZigZag ($pwt=70$，低於巡邏故為疊加而非取代） | — |
+| `lumbering` | 操縱能力受限的大型船 | BHV_MemoryTurnLimit（memory_time 25 s, turn_range 45） | — |
+| `loiterer` | 賴著不走的入侵者（非法捕撈／佔位） | BHV_Loiter（center_activate） | BHV_Waypoint 巡邏 |
+| `harasser` | 灰色地帶擠靠（反向追逐子船） | BHV_CutRange ($pwt=150$) | — |
+| `dead_ship` | 失去動力、漂流的非合作船 | BHV_ConstantSpeed speed=0 ($pwt=600$) | BHV_AvoidCollision |
+
+#### 對抗性設計：`loiterer` 與 `harasser`
+
+pTargetCoordinator 的驅逐閉環（第 4 節）建立在一個隱含假設上：**持續壓迫必然導致目標離境**，因此 `targetClearOfRegion` 終究會成立、SHIELD_EVICTIONS 終究會 +1。這兩個 profile 就是用來測試這個假設的邊界：
+
+* `loiterer` 被推開後必然回到原軌道 —— 閉環永遠不收斂。
+* `harasser` 的運動方向是**朝向**子船而非朝向邊界 —— 壓迫與逃逸的因果關係被反轉。
+
+其中 `harasser` 的權重配置是關鍵：BHV_CutRange 取 $pwt = 150$，**低於**仍然啟用的 BHV_AvoidCollision（$pwt = 250$）。追擊項驅動接近、避碰項設定 CPA 下限，兩者的 IvP 合成結果即為「擠靠而不接觸」（shouldering）；若把 CutRange 提到 250 以上，得到的是碰撞而非情境模擬。
+
+#### 實作陷阱一：templated 行為的命名碰撞
+
+三個 templated 行為（`target_avd_` / `target_col_` / `target_cut_`）必須各自訂閱**不同的** pContactMgrV20 警報變數（TGT_CONTACT_INFO / TGT_COLREGS_INFO / TGT_HARASS_INFO）。
+
+原因：templated 行為的**生成時機是 update 變數送達的當下，此時不檢查 condition**，而生成實例的名稱取自警報 `val` 中的 `name=` 欄位。若兩個 template 共用同一個警報，兩者會競爭同一個實例名稱，第二個生成請求被**靜默丟棄**，該 profile 因此永遠不會執行 —— 且不會有任何錯誤訊息。
+
+#### 實作陷阱二：BHV_ZigZag 的兩個鎖存問題
+
+`zigzag` profile 是本次調校中最不直觀的一項，三個參數互相牽制，缺一不可。
+
+**(1) stem 航向鎖存。** BHV_ZigZag 僅在 `onIdleToRunState()` 中鎖定一次 stem 航向（`m_stem_hdg = m_osh`），此後不再更新。掛在封閉巡邏迴圈上時，船隻通過第一個轉角後 stem 即已過期，行為會對著一個失效的方位持續產生 S 形指令。解法為 `uTimerScript_ZigCycle`：每 40 秒將 TGT_ZIG 置 false 維持 15 秒，強制行為走一次 run → idle → run，重新進入時重新鎖定當下航向。
+
+**(2) leg 計數不前進。** 行為必須**實際轉到請求的航向**（誤差在 `hdg_thresh` 內）才會計為完成一個 leg、才會翻向另一舷。當 $pwt$ 與巡邏行為同級或更低時，IvP 合成航向永遠到不了請求值，計數器不前進，行為永久停留在第一個 zig —— 輸出是一個**固定的航向偏移**而非擺盪。實測 $pwt = 70$ 與 $pwt = 100$ 皆為此結果：船維持偏離的航向，每次 re-sync 再往同一側偏移一次，形成 $270^\circ \to 245^\circ \to 219^\circ \to 190^\circ$ 的單向盤旋。單獨放寬 `hdg_thresh` 或加大 `max_zig_legs` 均無法解決。
+
+**(3) 權重與航線的取捨。** 因此 $pwt$ 取 200（高於巡邏的 100）。實測指令航向確實在 $\pm 35^\circ$ 兩側翻邊（$266^\circ \to 335^\circ \to 246^\circ \to 315^\circ \to 220^\circ \to 291^\circ$），實際航向擺盪、航跡沿航道左右偏移約 8 m。代價是航線退為建議：若整個週期都由 ZigZag 主導，會超越航點約 20 m。上述 15 秒的 re-sync 空檔即是買回的航線權 —— 該時段內僅有巡邏行為在操舵。
+
+此 profile 定位為「沿航線大致前進但不可預測」的逃逸船，並非精準循跡；若需嚴格貼線的 S 形航跡，需改用比 BHV_ZigZag 更受控的方式（例如直接產生鋸齒航點）。
+
+#### 速度上限（MAX_SPD）：只影響衝刺上限，不影響巡航動力學
+
+MAX_SPD 是 Helm 速度域上界，**也是** uSimMarine 對 `NAV_SPEED` 的硬夾限（原始碼 `USM_MOOSApp.cpp`：超過即 clamp）。但它**不是**推力對速度的增益——增益（`thrust_factor`）是獨立寫死的常數，不受此值影響。
+
+初版文件曾誤認兩者耦合，寫成「調高上限會改變巡航動力學」，理由是一次未等船完全穩定就取樣的比較測試（0.30 vs 0.64 m/s）。重新做了嚴謹的完整穩態對照後推翻此結論：
+
+| MAX_SPD | 指令速度 | 穩態實速（完整穩定後採樣） |
+| :--- | :--- | :--- |
+| 1.2 | 0.78 m/s | 0.70 m/s |
+| 3.0 | 0.78 m/s | 0.77 m/s |
+
+差異落在量測雜訊範圍內（採樣點在巡邏航道轉角前後、`turn_spd_loss` 造成的暫態速度損失），並非上限造成。
+
+MAX_SPD 真正影響的只有**用力衝刺時能衝多快**——`BHV_AvoidCollision` 的閃避、或 `sprinter` profile 的衝刺。既有實跑 log（LOG_TARGET，11571 筆 NAV_SPEED 取樣）顯示目標船平均 0.595 m/s、峰值 1.18 m/s 貼著舊版 1.2 上限飽和，亦即舊版 benchmark 的逃逸段本身就被這個上限限制住了。
+
+因此預設值改為 **3.0**：巡航行為（0.5～0.8 m/s 的所有 `Action > Target Speed` 選項）不受影響，`sprinter` 的衝刺與避碰時的閃避上限則從 1.2 放寬到 3.0。需要重現舊上限下的逃逸段數字時，用 `./launch.sh --tgt_max_spd=1.2`。
 
 ---
 
