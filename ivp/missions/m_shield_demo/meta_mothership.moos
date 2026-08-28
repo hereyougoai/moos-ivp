@@ -83,6 +83,7 @@ ProcessConfig = pShare
   output = src_name=SURVEY_AUTO,       dest_name=SURVEY,       route=localhost:$(USV1_PSHARE=9201)
   output = src_name=SURVEY_AUTO,       dest_name=SURVEY,       route=localhost:$(USV2_PSHARE=9202)
 
+
   // Coordinator's own visuals (mission region outline + the swept
   // coverage grid) go up to the shoreside so the operator sees them.
   output = src_name=VIEW_POLYGON,    route=localhost:$(SHORE_PSHARE)
@@ -167,6 +168,13 @@ ProcessConfig = pRegionDivider
   endpoint_inset  = 0.70
 
   cell_size = 10
+
+  // Charted land, shared with the helm's obstacle tiles: both come out of
+  // gen_land.py, so what the planner routes around and what the helm avoids
+  // are the same shoreline. Missing file => plans as open water.
+  land_file     = land.txt
+  land_trim     = true
+  land_standoff = 8
 
   // Falls back to this if DEPLOY_ALL fires before the operator has
   // ever pressed REGION to send a MISSION_POLY up from the shoreside.
@@ -337,6 +345,27 @@ ProcessConfig = pTargetCoordinator
   // Action/Eviction Distance menu, which posts EVICT_BUFFER.
   region_exit_buffer = 15
   release_hold       = 8
+
+  // Charted land, same file the helm's obstacle tiles came from. Two effects,
+  // both in the blocking geometry rather than in avoidance:
+  //
+  //   exit scoring     a bearing whose path to open water crosses the shore,
+  //                    or squeezes through a gap narrower than land_standoff,
+  //                    stops being an exit at all. On open water every bearing
+  //                    eventually leaves the region and the cost function only
+  //                    chose between cheap and cheaper; in a bay the escape
+  //                    fan is genuinely narrow and the pair has something to
+  //                    close against.
+  //
+  //   station validity a block or retreat point ashore is slid back along the
+  //                    line from the intruder until it is in water. Left
+  //                    alone the USV drives at it, land avoidance holds it
+  //                    off, and the block never forms.
+  //
+  // land_aware = false restores the pre-shoreline behaviour for a control run.
+  land_file     = land.txt
+  land_aware    = true
+  land_standoff = 10
 
   // Deaf period after a success, so the USVs get to turn back into
   // their search pattern instead of re-acquiring the same target while

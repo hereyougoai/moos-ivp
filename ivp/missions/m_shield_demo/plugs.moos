@@ -79,6 +79,23 @@ ProcessConfig = uSimMarineV22
 
 	//app_logging = true
 	max_speed   = $(MAX_SPD)
+
+	// Stall guard. Propagation is a single integration step over however
+	// long it has been since the last one, so when the host stalls -- this
+	// machine stalls ~3.8s every ~36s, measured with a plain shell loop
+	// that knows nothing about MOOS -- every process stops, the helm
+	// included, and on resume the vehicle is carried the whole distance in
+	// one jump. At warp 10 that was a 70 m leap straight through the
+	// shoreline, with the helm advancing a single iteration where it should
+	// have advanced 181. No behavior can defend against that, because no
+	// behavior runs during it.
+	//
+	// 1.0s is ten times the nominal step (AppTick 10), so ordinary jitter
+	// passes through untouched and only a real stall is clamped. Past it
+	// the world does not advance: 1 s of motion, about 2 m, instead of 70.
+	// Watch USM_STALL_COUNT / USM_STALL_SKIPPED to see how much sim time a
+	// run actually lost.
+	max_time_step = $(MAX_TIME_STEP=1.0)
 	
 	turn_rate = 95
 	// Bleeding 60% of speed in a hard turn made the USV fall behind
@@ -98,3 +115,49 @@ ProcessConfig = uSimMarineV22
   //thrust_map = -100:-2, 0:0, 20:1, 40:2, 60:3, 80:5, 100:5
 }
 
+<tag><pLandGuard>
+//--------------------------------------------------
+// pLandGuard Config Block
+//
+// Shared by the USVs and the intruder: any hull that can be steered onto the
+// beach needs the recovery, and every profile can be.
+//
+// crumb_dist is 15 rather than the app default of 20 because abe starts at
+// (0,0), which is 20.0 m off the shoreline. At 20 the very first breadcrumb
+// would sit exactly on the threshold, and a vehicle that never records one
+// has no escape point and cannot be recovered at all.
+
+ProcessConfig = pLandGuard
+{
+  AppTick   = 4
+  CommsTick = 4
+
+  land_file = land.txt
+
+  // Throttle band. The hysteresis is what stops a lane run parallel to the
+  // shore from chattering between speeds at the trigger distance.
+  slow_dist       = 25
+  slow_hysteresis = 8
+
+  // Recovery trips before contact. Once the hull is inside a tile the
+  // avoidance behavior has already gone quiet, so waiting for that would
+  // leave recovery nothing to work with. 3 m is inside the 4 m the shoreline
+  // was grown seaward when the tiles were generated, so this fires while the
+  // vehicle is still, strictly, in water.
+  breach_dist     = 3
+
+  crumb_dist      = 15
+  crumb_spacing   = 10
+  arrive_dist     = 8
+
+  // Deadlock breaker. Vehicles stopped on purpose are exempt via hold_var;
+  // everything else that stops making way for stuck_secs gets a speed floor
+  // until it is moving again.
+  stuck_speed     = 0.05
+  stuck_secs      = 20
+  unstick_secs    = 12
+  hold_var        = STATION_KEEP
+  hold_var        = TGT_HOLD
+
+  post_visuals    = true
+}

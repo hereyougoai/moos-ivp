@@ -29,6 +29,8 @@ Processconfig = ANTLER
   Run = uFldNodeBroker @ NewConsole = false
   Run = uSimMarineV22  @ NewConsole = false
   Run = pContactMgrV20 @ NewConsole = false
+  Run = pObstacleMgr   @ NewConsole = false
+  Run = pLandGuard     @ NewConsole = false
   Run = pTargetPathPlanner @ NewConsole = false
   Run = uTimerScript    @ NewConsole = false ~uTimerScript_ZigCycle
 }
@@ -36,6 +38,13 @@ Processconfig = ANTLER
 #include plugs.moos <pShare>
 #include plugs.moos <pHostInfo>
 #include plugs.moos <uProcessWatch>
+
+// Charted land. The intruder needs this as much as the USVs do: without it
+// the target profiles will happily drive an evasion leg straight onto the
+// beach, and the escape-direction logic on the mothership would be scoring
+// exits that do not exist.
+#include plug_land_obstacles.moos
+#include plugs.moos <pLandGuard>
 
 //------------------------------------------------------
 // uSimMarineV22 Config Block
@@ -51,6 +60,12 @@ ProcessConfig = uSimMarineV22
   max_speed     = $(MAX_SPD)
   turn_rate     = 70
   turn_spd_loss = 0.6
+
+  // Stall guard -- see the long note in plugs.moos <uSimMarine>. The target
+  // has its own uSimMarineV22 block rather than including that plug, so the
+  // setting has to be repeated here; leaving it out would let the intruder
+  // alone keep jumping through the shoreline.
+  max_time_step = $(MAX_TIME_STEP=1.0)
 }
 
 //----------------------------------------------------

@@ -25,6 +25,8 @@ Processconfig = ANTLER
   Run = uLoadWatch     @ NewConsole = false
   Run = uMemWatch      @ NewConsole = false
   Run = pContactMgrV20 @ NewConsole = false
+  Run = pObstacleMgr   @ NewConsole = false
+  Run = pLandGuard     @ NewConsole = false
   Run = pRealm         @ NewConsole = false
   Run = uTimerScript   @ NewConsole = false
 
@@ -44,6 +46,11 @@ Processconfig = ANTLER
 #include plugs.moos <pShare>
 #include plugs.moos <pHostInfo>
 #include plugs.moos <uProcessWatch>
+
+// Charted land. Feeds OBSTACLE_ALERT to the templated BHV_AvoidObstacleV24
+// in the .bhv file. Regenerate with ./gen_land.py -- never edit by hand.
+#include plug_land_obstacles.moos
+#include plugs.moos <pLandGuard>
 
 //----------------------------------------------------
 // pHelmIvP Config Block  

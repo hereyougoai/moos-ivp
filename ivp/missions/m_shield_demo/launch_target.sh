@@ -180,13 +180,18 @@ nsplug meta_target.moos targ_$VNAME.moos $NSFLAGS WARP=$TIME_WARP \
        SHORE_PSHARE=$SHORE_PSHARE   VNAME=$VNAME           \
        COLOR=$COLOR                 START_POS=$START_POS   \
        MAX_SPD=$MAX_SPD             MMOD=$MMOD             \
-       TGT_PATROL=$TGT_PATROL
+       TGT_PATROL=$TGT_PATROL                              \
+       LAND_ALERT_RANGE=${LAND_ALERT_RANGE:-35} \
+       MAX_TIME_STEP=${MAX_TIME_STEP:-1.0}
 
 nsplug meta_target.bhv targ_$VNAME.bhv $NSFLAGS \
        VNAME=$VNAME                 TGT_SPD=$TGT_SPD   \
        TGT_PATROL=$TGT_PATROL       TGT_HOME=$TGT_HOME \
        TGT_PROFILE=$TGT_PROFILE     MAX_SPD=$MAX_SPD   \
-       MMOD=$MMOD
+       MMOD=$MMOD                                      \
+       LAND_ALLSTOP=${LAND_ALLSTOP:-false} \
+       LAND_SLOW_SPD=${LAND_SLOW_SPD:-0.8} \
+       LAND_ESCAPE_SPD=${LAND_ESCAPE_SPD:-1.2}
 
 if [ "${JUST_MAKE}" = "yes" ]; then
     echo "$ME: Targ files made; exiting without launch."

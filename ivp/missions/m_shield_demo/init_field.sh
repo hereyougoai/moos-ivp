@@ -59,12 +59,23 @@ done
 #------------------------------------------------------------
 vecho "Setting starting position, speeds, vnames, colors"
 
-echo "x=0,y=0,heading=180"   >  vpositions.txt
-echo "x=180,y=0,heading=180" >> vpositions.txt
-echo "x=0,y=-75"             >  vloiterpos.txt
-echo "x=125,y=-50"           >> vloiterpos.txt
+# Start positions, in open water. Clearances below are to the charted
+# shoreline in land.txt; check any new value with the land model rather than
+# by eye, since the west shore steps east sharply north of y=-40.
+#
+# The old pair was 0,0 and 180,0. 0,0 sits 20 m off the shoreline, which puts
+# a vehicle inside pLandGuard's throttle band (25 m) and inside the land
+# avoidance behavior's outer range (30 m) from the moment it launches --
+# throttled and being nudged sideways before it has done anything.
+echo "x=40,y=-60,heading=180"  >  vpositions.txt    # abe, 76 m clear
+echo "x=150,y=-60,heading=180" >> vpositions.txt    # ben, 83 m clear
+echo "x=0,y=-75"               >  vloiterpos.txt    # 74 m clear
+echo "x=125,y=-50"             >> vloiterpos.txt    # 109 m clear
 
 if [ "${FAST}" != "" ]; then
+    # Head-to-head start. Pulled off the west shore as well: the old -10,-80
+    # was fine, but 150,-80 / -10,-80 leave the pair converging along y=-80,
+    # which is open water for its whole length.
     echo "x=150,y=-80,heading=270" >  vpositions.txt
     echo "x=-10,y=-80,heading=90"  >> vpositions.txt
     echo "x=0,y=-95"               >  vloiterpos.txt

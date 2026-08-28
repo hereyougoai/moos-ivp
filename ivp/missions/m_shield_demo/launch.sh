@@ -221,6 +221,56 @@ if [ "${JUST_MAKE}" != "" ]; then
 fi
 
 #------------------------------------------------------------
+#  Part 7b: Helm health check
+#
+#  A behavior file with a single unacceptable parameter does not degrade --
+#  pHelmIvP rejects the whole file, reports MALCONFIG, and every vehicle sits
+#  at its start position. On screen that is indistinguishable from a mission
+#  simply not having been deployed yet, which has cost several runs and one
+#  batch of ten that produced clean-looking numbers for vehicles that never
+#  moved. So it is checked here, once, and said out loud.
+#
+#  uQueryDB reads without writing and exits 0 when the condition holds. It is
+#  deliberately not uPokeDB: poking IVPHELM_STATE to read it is what disabled
+#  a helm earlier in this mission's history.
+#------------------------------------------------------------
+check_helm() {
+    local vname=$1
+    local port=$2
+    if uQueryDB --host=localhost --port=$port \
+                --condition="IVPHELM_STATE != MALCONFIG" --wait=12 >/dev/null 2>&1
+    then
+        return 0
+    fi
+    echo ""
+    echo "$ME: ============================================================"
+    echo "$ME: HELM NOT RUNNING on $vname (IVPHELM_STATE is MALCONFIG, or"
+    echo "$ME: the helm never started). The vehicle will not move."
+    echo "$ME:"
+    echo "$ME: A rejected behavior parameter takes down the whole file. To"
+    echo "$ME: see which line, comment out 'app_logging' and 'hold_on_apps'"
+    echo "$ME: in targ_$vname.moos and run:"
+    echo "$ME:     pHelmIvP targ_$vname.moos 2>&1 | grep -A2 Fatal"
+    echo "$ME: ============================================================"
+    echo ""
+    return 1
+}
+
+if [ "${NOGUI}" = "" ]; then
+    HELM_BAD=""
+    IX=0
+    for VNAME in "${VNAMES[@]:0:$VAMT}"; do
+        PORT=$((9001 + IX))
+        check_helm "$VNAME" "$PORT" || HELM_BAD="yes"
+        IX=$((IX+1))
+    done
+    check_helm "target" 9003 || HELM_BAD="yes"
+    if [ "${HELM_BAD}" = "yes" ]; then
+        echo "$ME: One or more helms are misconfigured - see above."
+    fi
+fi
+
+#------------------------------------------------------------
 #  Part 8: Unless auto-launched, launch uMAC until mission quit
 #------------------------------------------------------------
 if [ "${XLAUNCHED}" != "yes" ]; then

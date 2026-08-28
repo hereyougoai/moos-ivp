@@ -192,12 +192,17 @@ nsplug meta_vehicle.moos targ_$VNAME.moos $NSFLAGS WARP=$TIME_WARP \
        COLOR=$COLOR                 XMODE=$XMODE         \
        START_POS=$START_POS         MAX_SPD=$MAX_SPD     \
        MMOD=$MMOD                                        \
-       FSEAT_IP=$FSEAT_IP
+       FSEAT_IP=$FSEAT_IP                                \
+       LAND_ALERT_RANGE=${LAND_ALERT_RANGE:-35} \
+       MAX_TIME_STEP=${MAX_TIME_STEP:-1.0}
 
 nsplug meta_vehicle.bhv targ_$VNAME.bhv $NSFLAGS  \
        START_POS=$START_POS         VNAME=$VNAME  \
        STOCK_SPD=$STOCK_SPD         MMOD=$MMOD    \
-       LOITER_POS=$LOITER_POS
+       LOITER_POS=$LOITER_POS                     \
+       LAND_ALLSTOP=${LAND_ALLSTOP:-false} \
+       LAND_SLOW_SPD=${LAND_SLOW_SPD:-0.8} \
+       LAND_ESCAPE_SPD=${LAND_ESCAPE_SPD:-1.2}
 
 if [ "${JUST_MAKE}" = "yes" ]; then
     echo "$ME: Targ files made; exiting without launch."

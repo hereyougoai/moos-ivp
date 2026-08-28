@@ -11,6 +11,10 @@ initialize  AVOID         = true
 initialize  TARGET_ALERT  = false
 initialize  SURVEY        = false
 
+// Raised by pLandGuard when a vehicle has stopped making way and is not
+// holding station on purpose. See the unstick behavior at the end of file.
+initialize  STUCK = false
+
 //----------------------------------------------
 // Mode Hierarchy
 // Priority (top wins): STATION-KEEPING > RETURNING > INTERCEPTING > SURVEYING > LOITERING
@@ -44,9 +48,19 @@ set MODE = SURVEYING {
   TARGET_ALERT = false
 }
 
+// The fallback, deliberately without a LOITER = true clause.
+//
+// Every other sub-mode needs a flag set. If the coordinator or the operator
+// leaves all of them false, MODE resolves to ACTIVE with no sub-mode, no
+// behavior runs, and the helm reports an all-stop with reason NothingToDo --
+// the vehicle stops dead and stays stopped, with nothing on screen to say
+// why. Making LOITERING the else-case of ACTIVE means a deployed vehicle
+// with no assignment loiters instead of halting.
+//
+// LOITER is still honoured as a positive request; it is simply no longer
+// required to reach this mode.
 set MODE = LOITERING {
   MODE = ACTIVE
-  LOITER = true
   SURVEY = false
   TARGET_ALERT = false
   RETURN = false
@@ -412,6 +426,186 @@ Behavior = BHV_Waypoint
   speed     = 1.3
   radius    = 3.0
   nm_radius = 15.0
-  points    = 0,0
+
+  // Mid-lake, not the old 0,0. That point is 20 m off the shoreline, so a
+  // vehicle sent home would station-keep inside pLandGuard's throttle band
+  // and with the land avoidance permanently nudging it. 90,-80 has 113 m of
+  // water around it.
+  points    = 90,-80
   lead      = 8
+}
+
+//----------------------------------------------
+// BHV_AvoidObstacleV24 — Charted land
+//
+// One instance spawns per land tile that pObstacleMgr reports within its
+// alert_range; the tiles themselves come from gen_land.py and are the convex
+// decomposition of the real Forrest Lake shoreline.
+//
+// pwt is above avdcol_ (300) and well above the waypoint and trail behaviors.
+// That ordering is deliberate: giving way to another hull is negotiable,
+// running aground is not.
+//
+// Two failure modes end in an all-stop rather than a bad turn. If ownship is
+// already inside a tile no IvP function can be built, and if the turn radius
+// makes contact unavoidable every heading scores zero utility; either posts
+// an error, which the helm turns into DESIRED_SPEED = 0. Both are backstops,
+// not the intended path -- and note that uSimMarine has no collision model at
+// all, so nothing but this behavior keeps a hull off the beach.
+//
+// $(LAND_ALLSTOP) is set false by the benchmark scripts: one grazed headland
+// would otherwise zero the speed and poison the statistics for a whole run.
+Behavior = BHV_AvoidObstacleV24
+{
+  name       = avd_land_
+  pwt        = 500
+  condition  = AVOID = true
+  condition  = MODE == ACTIVE
+  updates    = OBSTACLE_ALERT
+  templating = spawn
+
+  // Warn, do not halt -- on both counts. A halt here is a deadlock, not a
+  // safety measure: the vehicle is told to stop, and the condition that
+  // stopped it only clears by moving. Recovery is pLandGuard's job now
+  // (LAND_BREACH below), and recovery needs a vehicle it can still steer.
+  //
+  // allstop_on_unavoidable is a local addition to BHV_AvoidObstacleV24. The
+  // stock behavior halts unconditionally when every course and speed scores
+  // zero utility; that case is "still outside, but out of room to turn",
+  // which is exactly when recovery should be driving, not stopping.
+  //
+  // Set both true to get the stock grounding behavior back.
+  allstop_on_breach      = $(LAND_ALLSTOP=false)
+  allstop_on_unavoidable = $(LAND_ALLSTOP=false)
+
+  // 30 m is roughly 8 s of warning at a 4 m/s pursuit speed, which leaves
+  // room for one smooth alteration instead of a late, hard one.
+  pwt_outer_dist = 30
+  pwt_inner_dist = 12
+
+  // Must exceed pObstacleMgr's alert_range (35), or a spawned instance
+  // retires itself while the manager is still alerting on the same tile and
+  // the pair thrash against each other.
+  completed_dist = 40
+
+  // The platform model is not configured for this behavior, so it solves
+  // holonomically whatever this says. Without the flag every instance posts a
+  // warning about that on every iteration -- 8,659 of them in one run, which
+  // buries the warnings that mean something.
+  holonomic_ok   = true
+
+  // The standoff. Not buffer_dist -- that belonged to the pre-V24 behavior,
+  // and V24 rejects it outright, which takes the whole helm to MALCONFIG
+  // rather than just ignoring the line. V24 states the same thing as the CPA
+  // band: minimum utility at 8 m from the tile, full utility by 18 m.
+  //
+  // The tiles were already grown 4 m seaward of the true waterline when they
+  // were generated, so 8 m here puts a hull about 12 m off the real shore.
+  min_util_cpa_dist = 8
+  max_util_cpa_dist = 18
+  allowable_ttc     = 6
+}
+
+//----------------------------------------------
+// Land guard: throttle, and recovery
+//
+// Two layers on top of BHV_AvoidObstacleV24, both driven by pLandGuard.
+//
+// The avoidance behavior handles the ordinary approach. What it cannot do is
+// act once the vehicle is inside an obstacle -- its objective function
+// answers "which way is least likely to hit this", which has no answer after
+// the fact, so it falls silent and the survey waypoints take over, steering
+// by a plan that knows nothing about land.
+
+//----------------------------------------------
+// BHV_ConstantSpeed - throttle back near the shore
+//
+// Not merely for reaction time. Running out of turning room IS the
+// "unavoidable" case in BHV_AvoidObstacleV24, and turning room is bought
+// with speed: at $(LAND_SLOW_SPD=0.8) m/s the geometry that produces it is
+// hard to reach in the first place.
+//
+// pwt sits below the avoidance behaviors, which decide the heading. This one
+// only argues about speed, and losing that argument is harmless.
+Behavior = BHV_ConstantSpeed
+{
+  name       = land_slow
+  pwt        = 200
+  condition  = MODE == ACTIVE
+  condition  = LAND_SLOW = true
+  duration   = no-time-limit
+  perpetual  = true
+
+  speed      = $(LAND_SLOW_SPD=0.8)
+  basewidth  = 0.3
+  peakwidth  = 0.1
+}
+
+//----------------------------------------------
+// BHV_Waypoint - drive back off the beach
+//
+// Destination comes from pLandGuard as the last position at which this
+// vehicle had real open water around it -- not the nearest water, which can
+// lie across a spit and be reachable only by crossing more land. The vehicle
+// arrived from that point, so it can return to it: for recovery,
+// reachability beats distance.
+//
+// pwt above the land avoidance (500) on purpose. While recovering, the two
+// would otherwise argue: avoidance wants distance from the tile, this wants
+// a specific heading out. In practice they rarely conflict, since driving
+// away puts the obstacle astern and isObstacleAft() quiets avoidance anyway.
+//
+// The escape point is published continuously, not just at breach time, so
+// this behavior always has a live destination loaded before the condition
+// flips. UPDATES are consumed whether a behavior is running or idle.
+Behavior = BHV_Waypoint
+{
+  name       = land_escape
+  pwt        = 600
+  condition  = MODE == ACTIVE
+  condition  = LAND_BREACH = true
+  updates    = LAND_ESCAPE_UPDATE
+  perpetual  = true
+
+  speed          = $(LAND_ESCAPE_SPD=1.2)
+  capture_radius = 6.0
+  slip_radius    = 12.0
+  lead           = 8
+
+  visual_hints = nextpt_color=red, vertex_color=red
+  visual_hints = edge_color=red, edge_size=2
+}
+
+//----------------------------------------------
+// BHV_ConstantSpeed - break a mutual-avoidance deadlock
+//
+// Two hulls whose collision avoidance both solve to "hold still" are a
+// stable fixed point: neither moves, so the geometry never changes, so
+// neither ever moves again. Nothing reports it -- the helm is solving
+// happily and the answer it keeps reaching is zero. Observed with all three
+// vessels frozen for the remaining 8000 s of a run after one closed to 4.8 m
+// of the intruder while trailing.
+//
+// pLandGuard raises STUCK after $(STUCK_SECS=20)s with no way on. This puts
+// a floor under the solved speed; it does NOT touch heading, which still
+// comes from the avoidance behaviors, so the vehicle leaves along the
+// least-bad course rather than being steered blind into whatever it was
+// avoiding. Any motion at all is enough -- once the geometry changes the
+// fixed point is gone and the flag drops on the next iteration.
+//
+// pwt above the avoidance behaviors on purpose, and only on speed: this is
+// the one argument they must not win, because their answer is what has the
+// vehicle stopped.
+Behavior = BHV_ConstantSpeed
+{
+  name       = unstick
+  pwt        = 700
+  condition  = MODE == ACTIVE
+  condition  = STUCK = true
+  duration   = no-time-limit
+  perpetual  = true
+
+  speed      = $(UNSTICK_SPD=0.9)
+  basewidth  = 0.4
+  peakwidth  = 0.1
 }

@@ -16,6 +16,9 @@ Processconfig = ANTLER
   Run = MOOSDB          @ NewConsole = false
   Run = pRealm          @ NewConsole = false
   Run = uTimerScript    @ NewConsole = false ~ uTimerScript_Heartbeat
+  Run = uTimerScript    @ NewConsole = false ~ uTimerScript_LandInit
+  Run = uTimerScript    @ NewConsole = false ~ uTimerScript_LandDraw
+  Run = uTimerScript    @ NewConsole = false ~ uTimerScript_LandErase
 	Run = pMarineViewer   @ NewConsole = false
   Run = pLogger         @ NewConsole = false
   Run = uProcessWatch   @ NewConsole = false
@@ -26,6 +29,12 @@ Processconfig = ANTLER
 }
 
 #include plugs.moos <pHostInfo>
+
+// Shoreline overlay. Drawn by the shoreside rather than by the vehicles, so
+// the land is on screen from startup -- before anything is deployed and,
+// more to the point, before the operator draws the mission region by
+// clicking on the chart. Regenerate with ./gen_land.py.
+#include plug_land_view.moos
 //--------------------------------------------------
 // pShare Config Block (shoreside)
 // Inbound: everything vehicles and the mothership send us.
@@ -324,13 +333,25 @@ ProcessConfig = pMarineViewer
   // Region controls. Draw by picking "region" in the mouse-context
   // menu and left-clicking corners; these two are the reset and the
   // fall-back default.
+  //
+  // REGION:DEFAULT now covers the west shore and the northern peninsula.
+  // The old default (x -70..210, y -130..-10) sat in open water: measured
+  // against the extracted shoreline it was 1.0% land, so nothing about the
+  // terrain could ever show. This one is 16.1% land and forms a real bay,
+  // which is what gives the intruder's escape fan something to be closed
+  // against. REGION:OPEN keeps the old one as a no-land control.
   button_nine  = REGION:CLEAR # REGION_CLEAR = true
-  button_ten   = REGION:DEFAULT # MISSION_POLY = pts={-70,-10:210,-10:210,-130:-70,-130}
+  button_ten   = REGION:DEFAULT # MISSION_POLY = pts={-140,40:210,40:210,-160:-140,-160}
 
   // Intruder route drawing (see left_context[target_path] above).
   button_eleven   = TGT:UNDO  # TARGET_PATH_UNDO = true
   button_twelve   = TGT:CLEAR # TARGET_PATH_CLEAR = true
   button_thirteen = TGT:APPLY # TARGET_PATH_APPLY = true
+
+  // Shoreline overlay toggle, and the open-water control region.
+  button_fourteen = LAND:HIDE # LAND_VISIBLE = false
+  button_fifteen  = LAND:SHOW # LAND_VISIBLE = true
+  button_sixteen  = REGION:OPEN # MISSION_POLY = pts={-70,-10:210,-10:210,-130:-70,-130}
 
   //------------------------------------------------------------------
   // Pull-down menus (menu bar: Action)
