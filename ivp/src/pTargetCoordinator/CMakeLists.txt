@@ -16,6 +16,7 @@ TARGET_LINK_LIBRARIES(pTargetCoordinator
    ${MOOSGeodesy_LIBRARIES}
    contacts
    geometry
+   landmodel
    mbutil
    apputil
    ${SYSTEM_LIBS}

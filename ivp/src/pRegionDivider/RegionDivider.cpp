@@ -15,6 +15,7 @@
 #include "XYFormatUtilsSegl.h"
 #include "NodeRecord.h"
 #include "NodeRecordUtils.h"
+#include "XYPoint.h"
 
 using namespace std;
 
@@ -143,7 +144,19 @@ RegionDivider::RegionDivider()
 
   m_grid_ready        = false;
   m_cells_swept       = 0;
+  m_cells_land        = 0;
   m_geodesy_ok        = false;
+
+  m_land_file      = "land.txt";
+  m_land_trim      = true;
+  m_land_standoff  = 8;
+  m_land_ok        = false;
+
+  m_region_land_pct      = 0;
+  m_region_verts_on_land = 0;
+  m_lane_len_dropped     = 0;
+  m_plan_land_crossings  = 0;
+  m_plan_pts_dropped     = 0;
 }
 
 //---------------------------------------------------------
@@ -331,6 +344,14 @@ bool RegionDivider::OnStartUp()
 	handled = setUIntOnString(m_reposts_per_deploy, value);
       else if(param == "repeat_count")
 	handled = setUIntOnString(m_repeat_count, value);
+      else if(param == "land_file") {
+	m_land_file = value;
+	handled = true;
+      }
+      else if(param == "land_trim")
+	handled = setBooleanOnString(m_land_trim, value);
+      else if(param == "land_standoff")
+	handled = setNonNegDoubleOnString(m_land_standoff, value);
 
       if(!handled)
 	reportUnhandledConfigWarning(orig);
@@ -339,6 +360,8 @@ bool RegionDivider::OnStartUp()
 
   if(m_vnames.size() == 0)
     reportConfigWarning("No vnames configured - nothing to divide region for.");
+
+  loadLand(m_land_file);
 
   registerVariables();
   return(true);
@@ -528,6 +551,12 @@ void RegionDivider::clearRegion()
 
   Notify("REGION_POLY", "none");
 
+  m_region_land_pct      = 0;
+  m_region_verts_on_land = 0;
+  m_lane_len_dropped     = 0;
+  m_plan_land_crossings  = 0;
+  m_plan_pts_dropped     = 0;
+  m_cells_land   = 0;
   m_region_set   = false;
   m_reposts_left = 0;
   m_grid_ready  = false;
@@ -559,7 +588,164 @@ void RegionDivider::postRegionPoly()
   // pushed out of the search area.
   Notify("REGION_POLY", m_region.get_spec_pts(2));
 
+  assessRegionLand();
+
   postRegionCenter();
+}
+
+//------------------------------------------------------------
+// Procedure: loadLand()
+//   Purpose: Read the charted shoreline written by gen_land.py.
+//
+//            A missing file is not fatal. Without land the model answers
+//            every query as open water, every guard below is inert, and the
+//            app plans exactly as it did before land existed -- which is what
+//            makes an open-water control run possible.
+
+bool RegionDivider::loadLand(string filename)
+{
+  m_land_ok = m_land.loadFile(filename, m_land_errmsg);
+  if(!m_land_ok) {
+    reportConfigWarning("Land: " + m_land_errmsg + " (planning as open water)");
+    return(false);
+  }
+  if(!m_land.active())
+    reportConfigWarning("Land: no land masses in " + filename);
+  return(true);
+}
+
+//------------------------------------------------------------
+// Procedure: assessRegionLand()
+//   Purpose: Tell the operator what they just drew.
+//
+//            A region containing land is not an error -- shaping the mission
+//            around a bay is the entire reason the shoreline is here. What is
+//            worth flagging is a CORNER on land, because the sweep geometry
+//            is built off the region's vertices, so a corner ashore seeds
+//            lanes from a point no vehicle can reach.
+
+void RegionDivider::assessRegionLand()
+{
+  m_region_land_pct      = 0;
+  m_region_verts_on_land = 0;
+  if(!m_land.active() || !m_region_set)
+    return;
+
+  vector<double> rx, ry;
+  for(unsigned int k=0; k<m_region.size(); k++) {
+    rx.push_back(m_region.get_vx(k));
+    ry.push_back(m_region.get_vy(k));
+    if(m_land.contains(m_region.get_vx(k), m_region.get_vy(k)))
+      m_region_verts_on_land++;
+  }
+
+  m_region_land_pct = 100.0 * m_land.landFraction(rx, ry, m_cell_size / 2.0);
+
+  Notify("REGION_LAND_PCT", m_region_land_pct);
+
+  if(m_region_verts_on_land > 0) {
+    string msg = "region has " + uintToString(m_region_verts_on_land) +
+      " corner(s) on land";
+    Notify("REGION_LAND_WARNING", msg);
+    reportRunWarning(msg);
+
+    // Mark them on the chart. A number in an appcast is easy to miss; a red
+    // circle on the corner the operator just clicked is not.
+    for(unsigned int k=0; k<m_region.size(); k++) {
+      if(!m_land.contains(m_region.get_vx(k), m_region.get_vy(k)))
+        continue;
+      XYPoint pt(m_region.get_vx(k), m_region.get_vy(k));
+      pt.set_label("rgn_land_" + uintToString(k));
+      pt.set_color("vertex", "red");
+      pt.set_vertex_size(12);
+      Notify("VIEW_POINT", pt.get_spec());
+    }
+  }
+  else
+    Notify("REGION_LAND_WARNING", "none");
+}
+
+//------------------------------------------------------------
+// Procedure: waterRun()
+//   Purpose: Longest stretch of open water along a lane.
+//
+//            A lane is trimmed rather than detoured: the sweep patterns are
+//            built from straight legs in the sweep frame, and bending one
+//            around a headland would break the lane spacing the coverage
+//            argument rests on. Taking the LONGEST water run rather than
+//            trimming inward from both ends is what makes a lane split by a
+//            peninsula behave sensibly -- the vehicle sweeps the larger side
+//            instead of being handed a leg that jumps the headland.
+//
+//            The stretch given up is reported, not hidden: see the Land
+//            section of the appcast.
+
+bool RegionDivider::waterRun(double sweep_ang, double v,
+                             double u_a, double u_b,
+                             double& w_a, double& w_b) const
+{
+  w_a = u_a;
+  w_b = u_b;
+  if(!m_land.active())
+    return(true);
+
+  double len = u_b - u_a;
+  if(len <= 0)
+    return(false);
+
+  // One-metre sampling. Finer than the shoreline was simplified at (1.5 m),
+  // so nothing the model knows about is stepped over.
+  unsigned int steps = (unsigned int)(len) + 1;
+  double best_a = 0, best_b = 0, best_len = -1;
+  bool   in_run = false;
+  double run_a = 0;
+
+  for(unsigned int i=0; i<=steps; i++) {
+    double u = u_a + (len * (double)(i) / (double)(steps));
+    double x, y;
+    sweepToWorld(u, v, sweep_ang, x, y);
+    bool water = !m_land.contains(x, y);
+
+    if(water && !in_run) {
+      in_run = true;
+      run_a = u;
+    }
+    else if(!water && in_run) {
+      in_run = false;
+      double run_len = (u - run_a);
+      if(run_len > best_len) {
+        best_len = run_len;
+        best_a = run_a;
+        best_b = u;
+      }
+    }
+  }
+  if(in_run) {
+    double run_len = (u_b - run_a);
+    if(run_len > best_len) {
+      best_len = run_len;
+      best_a = run_a;
+      best_b = u_b;
+    }
+  }
+
+  if(best_len <= 0)
+    return(false);
+
+  // Hold off the waterline, but only at an end that land actually closed.
+  // Insetting an end that stopped at the region boundary would double up on
+  // the sensor-range trim the caller applies next.
+  if(best_a > (u_a + 0.5))
+    best_a += m_land_standoff;
+  if(best_b < (u_b - 0.5))
+    best_b -= m_land_standoff;
+
+  if((best_b - best_a) <= 0.5)
+    return(false);
+
+  w_a = best_a;
+  w_b = best_b;
+  return(true);
 }
 
 //------------------------------------------------------------
@@ -611,7 +797,24 @@ void RegionDivider::initCoverageGrid()
   m_grid = new_grid;
   m_grid_ready  = true;
   m_cells_swept = 0;
+  m_cells_land  = 0;
   m_grid_deltas.clear();
+
+  // Land cells are pre-marked swept and taken out of the denominator. Left
+  // alone they would sit unshaded forever and hold the coverage figure below
+  // 100% no matter how completely the water was searched -- which is exactly
+  // the kind of number that gets read as a planner bug. They are marked
+  // rather than merely excluded so they do not read as unswept holes; the
+  // land overlay is drawn over them anyway.
+  if(m_land.active()) {
+    for(unsigned int ix=0; ix<m_grid.size(); ix++) {
+      XYSquare cell = m_grid.getElement(ix);
+      if(!m_land.contains(cell.getCenterX(), cell.getCenterY()))
+        continue;
+      m_grid.setVal(ix, 1, 0);
+      m_cells_land++;
+    }
+  }
 
   postCoverageGrid();
 }
@@ -838,6 +1041,22 @@ bool RegionDivider::laneExtent(double sweep_ang, double v,
   double length = u_b - u_a;
   if(length <= 0)
     return(false);
+
+  // Then clip to water. Doing it here rather than after the pattern is built
+  // means every pattern gets it for free, and the lane a vehicle is given is
+  // one it can actually drive -- as opposed to one the helm spends the whole
+  // leg being pushed sideways off.
+  if(m_land_trim && m_land.active()) {
+    double w_a, w_b;
+    if(!waterRun(sweep_ang, v, u_a, u_b, w_a, w_b))
+      return(false);
+    m_lane_len_dropped += (u_b - u_a) - (w_b - w_a);
+    u_a = w_a;
+    u_b = w_b;
+    length = u_b - u_a;
+    if(length <= 0)
+      return(false);
+  }
 
   // Callers that are placing things ACROSS the lanes rather than
   // driving along one want the true extent: the trim is there because
@@ -1505,6 +1724,10 @@ bool RegionDivider::buildPlans()
   if(!m_region_set || (n == 0) || (m_region.size() < 3))
     return(false);
 
+  m_lane_len_dropped    = 0;
+  m_plan_land_crossings = 0;
+  m_plan_pts_dropped    = 0;
+
   double sweep_ang = sweepAngle();
   m_plan_sweep_ang = sweep_ang;
 
@@ -1525,6 +1748,31 @@ bool RegionDivider::buildPlans()
     double v_hi = v_lo + band;
 
     XYSegList segl = buildBandPath(sweep_ang, v_lo, v_hi);
+
+    // Backstop. Lane trimming keeps the sweep legs in water, but the legs
+    // BETWEEN lanes -- the turn-arounds, and the joins a spiral or figure-8
+    // makes across a band -- are not lanes and are not trimmed. Anything of
+    // theirs that ends ashore is dropped here, and anything that merely
+    // passes over land is counted and reported rather than quietly left in
+    // the plan: the helm will bend around it, but the operator should know
+    // the pattern is being fought.
+    if(m_land.active()) {
+      XYSegList clean;
+      for(unsigned int k=0; k<segl.size(); k++) {
+        double px = segl.get_vx(k), py = segl.get_vy(k);
+        if(m_land.contains(px, py)) {
+          m_plan_pts_dropped++;
+          continue;
+        }
+        clean.add_vertex(px, py);
+      }
+      for(unsigned int k=1; k<clean.size(); k++) {
+        if(m_land.segCrossesLand(clean.get_vx(k-1), clean.get_vy(k-1),
+                                 clean.get_vx(k), clean.get_vy(k)))
+          m_plan_land_crossings++;
+      }
+      segl = clean;
+    }
 
     double length = 0;
     unsigned int turns = 0;
@@ -1665,11 +1913,45 @@ bool RegionDivider::buildReport()
   m_msgs << "  Divisions Posted: " << m_divisions_posted << endl;
   m_msgs << "  Reposts Pending:  " << m_reposts_left << endl;
   if(m_grid_ready) {
+    // Denominator is water cells only. Counting land in it would cap the
+    // achievable figure at whatever fraction of the region is navigable.
+    unsigned int water = m_grid.size() - m_cells_land;
     double pct = 0;
-    if(m_grid.size() > 0)
-      pct = (100.0 * (double)m_cells_swept) / (double)m_grid.size();
-    m_msgs << "  Coverage:         " << m_cells_swept << "/" << m_grid.size()
-	   << " cells (" << doubleToStringX(pct,1) << "%)" << endl;
+    if(water > 0)
+      pct = (100.0 * (double)m_cells_swept) / (double)water;
+    m_msgs << "  Coverage:         " << m_cells_swept << "/" << water
+	   << " water cells (" << doubleToStringX(pct,1) << "%)";
+    if(m_cells_land > 0)
+      m_msgs << "  [" << m_cells_land << " land cells excluded]";
+    m_msgs << endl;
+  }
+  m_msgs << endl;
+
+  m_msgs << "Land:" << endl;
+  if(!m_land.active()) {
+    m_msgs << "  " << (m_land_ok ? "no land masses loaded" : m_land_errmsg)
+	   << endl;
+    m_msgs << "  Planning as open water." << endl;
+  }
+  else {
+    m_msgs << "  Source:           " << m_land.getSummary() << endl;
+    m_msgs << "  Lane Trim:        " << boolToString(m_land_trim)
+	   << "  (standoff " << doubleToStringX(m_land_standoff,1) << "m)"
+	   << endl;
+    if(m_region_set) {
+      m_msgs << "  Region Land:      "
+	     << doubleToStringX(m_region_land_pct,1) << "%" << endl;
+      if(m_region_verts_on_land > 0)
+	m_msgs << "  !! Corners ashore: " << m_region_verts_on_land
+	       << " -- lanes are seeded from region corners" << endl;
+      m_msgs << "  Lane Len Dropped: "
+	     << doubleToStringX(m_lane_len_dropped,0) << "m" << endl;
+      m_msgs << "  Pts Dropped:      " << m_plan_pts_dropped << endl;
+      // Legs that still cross land are turn-arounds between lanes, not sweep
+      // legs. The helm will bend them; they are surfaced so that a pattern
+      // fighting the terrain is visible rather than merely felt.
+      m_msgs << "  Legs Over Land:   " << m_plan_land_crossings << endl;
+    }
   }
   m_msgs << endl;
 

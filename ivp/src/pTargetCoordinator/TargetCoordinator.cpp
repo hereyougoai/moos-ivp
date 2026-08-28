@@ -64,6 +64,13 @@ TargetCoordinator::TargetCoordinator()
   m_sensor_radius      = 15;
   m_release_hold       = 8;
   m_region_exit_buffer = 15;
+
+  m_land_file      = "land.txt";
+  m_land_standoff  = 10;
+  m_land_aware     = true;
+  m_land_ok        = false;
+  m_exits_blocked_by_land = 0;
+  m_stations_pulled       = 0;
   m_reengage_delay     = 10;
   m_alert_var          = "TARGET_ALERT_AUTO";
   m_survey_var         = "SURVEY_AUTO";
@@ -523,6 +530,14 @@ bool TargetCoordinator::OnStartUp()
 	handled = setNonNegDoubleOnString(m_release_hold, value);
       else if(param == "region_exit_buffer")
 	handled = setNonNegDoubleOnString(m_region_exit_buffer, value);
+      else if(param == "land_file") {
+	m_land_file = value;
+	handled = true;
+      }
+      else if(param == "land_aware")
+	handled = setBooleanOnString(m_land_aware, value);
+      else if(param == "land_standoff")
+	handled = setNonNegDoubleOnString(m_land_standoff, value);
       else if(param == "reengage_delay")
 	handled = setNonNegDoubleOnString(m_reengage_delay, value);
       else if(param == "alert_var")
@@ -556,6 +571,11 @@ bool TargetCoordinator::OnStartUp()
 
   if(m_vnames.size() == 0)
     reportConfigWarning("No vnames configured - nothing to assign stations to.");
+
+  m_land_ok = m_land.loadFile(m_land_file, m_land_errmsg);
+  if(!m_land_ok)
+    reportConfigWarning("Land: " + m_land_errmsg +
+			" (scoring exits as open water)");
 
   registerVariables();
   return(true);
@@ -1659,6 +1679,9 @@ bool TargetCoordinator::blockPoints(double lead1,
 
     projectPoint(hdg, lead2, tx, ty, fx, fy);
     projectPoint(side_ang, currentBlockOffset() + m_block_span, fx, fy, b2x, b2y);
+
+    pullStationToWater(tx, ty, b1x, b1y);
+    pullStationToWater(tx, ty, b2x, b2y);
     return(true);
   }
 
@@ -1666,7 +1689,41 @@ bool TargetCoordinator::blockPoints(double lead1,
   projectPoint(hdg, lead1, tx, ty, fx, fy);
   projectPoint(angle360(hdg + 90), wide, fx, fy, b1x, b1y);
   projectPoint(angle360(hdg - 90), wide, fx, fy, b2x, b2y);
+
+  pullStationToWater(tx, ty, b1x, b1y);
+  pullStationToWater(tx, ty, b2x, b2y);
   return(true);
+}
+
+//------------------------------------------------------------
+// Procedure: pullStationToWater()
+//   Purpose: Slide a station back along the line from the intruder until it
+//            is in open water.
+//
+//            A station ashore is not merely useless, it is actively bad: the
+//            USV drives at it, land avoidance holds it off, and it sits there
+//            never satisfying its capture radius while the block it was meant
+//            to form never forms. Pulling the point back toward the intruder
+//            keeps the geometry -- same bearing, shorter arm -- which is the
+//            part that matters, since the block works by sitting across the
+//            track rather than at a particular distance along it.
+
+void TargetCoordinator::pullStationToWater(double tx, double ty,
+                                           double& bx, double& by) const
+{
+  if(!m_land_aware || !m_land.active())
+    return;
+  if(!m_land.contains(bx, by) &&
+     !m_land.segCrossesLand(tx, ty, bx, by))
+    return;
+
+  double ox, oy;
+  if(!m_land.waterPortion(tx, ty, bx, by, m_land_standoff, ox, oy))
+    return;   // the intruder itself is ashore; nothing sane to do here
+
+  bx = ox;
+  by = oy;
+  m_stations_pulled++;
 }
 
 //------------------------------------------------------------
@@ -2109,6 +2166,11 @@ void TargetCoordinator::assignAndPostBlock()
       double away = angle360(relAng(tx, ty, vx, vy));
       projectPoint(away, m_block_abort + m_block_rearm, tx, ty,
 		   m_retreat_x[slot], m_retreat_y[slot]);
+      // The give-way bearing is chosen for the shortest turn away, with no
+      // regard for what is behind the USV -- which against a shoreline is
+      // regularly the beach. Latched at onset, so a retreat point ashore
+      // would stay wrong for the whole give-way.
+      pullStationToWater(tx, ty, m_retreat_x[slot], m_retreat_y[slot]);
       m_block_utc[slot] = 0;   // force the post below
 
       Notify("BLOCK_GIVEWAY_" + toupper(m_vnames[vidx]), "true");
@@ -2493,9 +2555,30 @@ double TargetCoordinator::exitDistance(double bearing) const
   const double max_dist = 400;
 
   double prev = here;
+  double prev_x = tx, prev_y = ty;
   for(double dist=step; dist<=max_dist; dist+=step) {
     double px, py;
     projectPoint(bearing, dist, tx, ty, px, py);
+
+    // The shore closes exits. This is the whole reason the coordinator was
+    // taught about land: on open water every bearing eventually leaves the
+    // region, so the cost function only ever chose between cheap and cheaper.
+    // In a bay most bearings lead nowhere, the escape fan is genuinely narrow,
+    // and the blocking pair has something to close against.
+    //
+    // Tested as a crossing of the step, not as containment of its endpoint --
+    // at a 5 m stride a spit or a headland tip is easy to step clean over.
+    if(m_land_aware && m_land.active()) {
+      if(m_land.segCrossesLand(prev_x, prev_y, px, py))
+        return(-1);
+      // A gap too narrow to take a hull through is not a way out either.
+      double clear = m_land.distToLand(px, py);
+      if((clear >= 0) && (clear < m_land_standoff))
+        return(-1);
+    }
+    prev_x = px;
+    prev_y = py;
+
     double off = regionOffset(px, py);
     if(off >= goal) {
       // Interpolate inside the step that crossed, so the cost is a
@@ -2592,11 +2675,14 @@ void TargetCoordinator::updateExitDirection()
 
   double best_dir  = 0;
   double best_cost = -1;
+  m_exits_blocked_by_land = 0;
   for(unsigned int i=0; i<36; i++) {
     double bearing = i * 10.0;
     double cost = exitCost(bearing, heading);
-    if(cost < 0)
+    if(cost < 0) {
+      m_exits_blocked_by_land++;
       continue;
+    }
     if((best_cost < 0) || (cost < best_cost)) {
       best_cost = cost;
       best_dir  = bearing;
@@ -3147,6 +3233,23 @@ bool TargetCoordinator::buildReport()
 	   << "," << doubleToStringX(m_center_y,1) << endl;
   else
     m_msgs << "  Region Center:      unknown (falling back to stern arc)" << endl;
+
+  m_msgs << "  Land:               ";
+  if(!m_land_aware)
+    m_msgs << "disabled (land_aware=false)" << endl;
+  else if(!m_land.active())
+    m_msgs << (m_land_ok ? "none loaded" : m_land_errmsg) << endl;
+  else {
+    m_msgs << m_land.getSummary() << endl;
+    // Of the 36 bearings scored each pass, how many the shore rules out.
+    // This is the number that says whether the terrain is doing any work:
+    // 0 means the intruder is in open water and the block is unaided, a high
+    // count means it is in a bay and the escape fan is already narrow.
+    m_msgs << "  Exits Shut by Land: " << m_exits_blocked_by_land
+	   << "/36  (standoff " << doubleToStringX(m_land_standoff,1) << "m)"
+	   << endl;
+    m_msgs << "  Stations Pulled:    " << m_stations_pulled << endl;
+  }
   m_msgs << endl;
 
   map<string, NodeRecord>::iterator t = m_records.find(m_target_name);

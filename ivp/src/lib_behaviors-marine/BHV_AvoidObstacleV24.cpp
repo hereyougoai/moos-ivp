@@ -78,6 +78,7 @@ BHV_AvoidObstacleV24::BHV_AvoidObstacleV24(IvPDomain gdomain) :
   m_holonomic_ok = false;
 
   m_allstop_on_breach = true;
+  m_allstop_on_unavoidable = true;
   
   initVisualHints();
   addInfoVars("NAV_X, NAV_Y, NAV_HEADING");
@@ -181,6 +182,8 @@ bool BHV_AvoidObstacleV24::setParam(string param, string val)
 
   else if(param == "allstop_on_breach") 
     return(setBooleanOnString(m_allstop_on_breach, val));
+  else if(param == "allstop_on_unavoidable")
+    return(setBooleanOnString(m_allstop_on_unavoidable, val));
   else
     return(false);
 
@@ -429,8 +432,20 @@ IvPFunction *BHV_AvoidObstacleV24::onRunState()
   // If IvP function has no decisions with positive utility then
   // this means a collision with an obstacle is unavoidable.
   // Possible when using plat model with non-zero turn radius.
+  //
+  // Halting is the safe answer at sea, where the alternative is choosing
+  // which way to hit something. It is the wrong answer in a simulation
+  // whose obstacle is charted land: the vehicle stops where it is, the
+  // condition that produced the halt never clears because the vehicle can
+  // no longer move, and the run is over. Missions that carry their own
+  // recovery -- something that notices the breach and drives the vehicle
+  // back to open water -- want a warning here instead, so that recovery
+  // has a vehicle it can still steer.
   if(ipf->getValMaxUtil() == 0) {
-    postEMessage("Allstop: obstacle unavoidable");
+    if(m_allstop_on_unavoidable)
+      postEMessage("Allstop: obstacle unavoidable");
+    else
+      postWMessage("Obstacle unavoidable");
     delete(ipf);
     return(0);
   }

@@ -46,6 +46,13 @@ public:
   
   // Setters
   bool   setParam(std::string, double);
+
+  // Stall guard. See USM_Model::propagate().
+  void   setMaxTimeStep(double v) {m_max_time_step = (v<0) ? 0 : v;}
+  double getMaxTimeStep() const   {return(m_max_time_step);}
+  unsigned int getStallCount() const {return(m_stall_count);}
+  double getStallSkipped() const  {return(m_stall_skipped);}
+
   bool   setParam(std::string, std::string);
 
   void   informX(double);
@@ -197,6 +204,13 @@ public:
   CMOOSGeodesy m_geodesy;
   bool         m_geo_ok;
   bool         m_obstacle_hit;
+
+  // Largest simulation interval, in seconds, that a single propagate() step
+  // is allowed to integrate. Zero disables the guard entirely, which is the
+  // default and the historical behavior.
+  double       m_max_time_step;
+  unsigned int m_stall_count;
+  double       m_stall_skipped;
   
   // Support for simulated sailing
   WindModel  m_wind_model;

@@ -73,6 +73,10 @@ USM_Model::USM_Model()
 
   m_geo_ok = false;
   m_obstacle_hit = false;
+
+  m_max_time_step = 0;   // 0 = guard disabled, historical behavior
+  m_stall_count   = 0;
+  m_stall_skipped = 0;
 }
 
 //------------------------------------------------------------------------
@@ -279,6 +283,11 @@ bool USM_Model::setParam(string param, double value)
       return(false);
     }
   }
+  else if(param == "max_time_step") {
+    if(value < 0)
+      return(false);
+    m_max_time_step = value;
+  }
   else if(param == "max_depth_rate")
     m_max_depth_rate = value;
   else if(param == "max_depth_rate_speed")
@@ -469,13 +478,56 @@ bool USM_Model::propagate(double g_curr_time)
   double a_curr_time = g_curr_time - m_pause_timer.get_wall_time();
   double delta_time  = a_curr_time - m_record.getTimeStamp();
 
+  // ---- Stall guard -------------------------------------------------
+  // Integration is a single step over however long it has been since the
+  // last call. That is fine while the sim is keeping up, and badly wrong
+  // when it is not: if the host stalls, every process here stops -- the
+  // helm included -- and on resume this one step carries the vehicle the
+  // whole distance at once. A 54-second stall moves a 2 m/s vehicle 108 m
+  // in one jump, straight through any obstacle in the way, with no helm
+  // iteration in between to steer around it. Measured on this machine:
+  // across such a stall the helm advanced exactly one iteration where it
+  // should have advanced 218.
+  //
+  // No behavior can defend against that, because no behavior runs during
+  // it. So the simulator refuses to make the jump: past max_time_step the
+  // world simply did not advance. A stalled simulation should pause
+  // everything, not fast-forward the hulls while the minds stand still.
+  //
+  // The skipped interval is dropped, not deferred. Deferring it -- letting
+  // the model catch up over the following steps -- reproduces the same
+  // failure more slowly, since the vehicle still covers the full distance
+  // on a handful of helm decisions.
+  //
+  // What this costs is honest and must stay visible: sim time advances
+  // while the vehicle does not, so a run spanning a stall covers less
+  // ground than its duration implies. The totals are published so a
+  // benchmark can see it rather than silently average it in.
+  double skipped = 0;
+  if((m_max_time_step > 0) && (delta_time > m_max_time_step)) {
+    skipped    = delta_time - m_max_time_step;
+    delta_time = m_max_time_step;
+    m_stall_count++;
+    m_stall_skipped += skipped;
+  }
+
   if(m_dual_state) {
     propagateNodeRecord(m_record, delta_time, false);
     propagateNodeRecord(m_record_gt, delta_time, true);
   }
   else
     propagateNodeRecord(m_record, delta_time, true);
-    
+
+  // Re-anchor to the current clock. The record's timestamp is advanced by
+  // delta_time down in SimEngine::propagate(), so without this the model
+  // would stay `skipped` seconds behind and clamp on every subsequent call
+  // -- which is the deferral this guard exists to avoid.
+  if(skipped > 0) {
+    m_record.setTimeStamp(m_record.getTimeStamp() + skipped);
+    if(m_dual_state)
+      m_record_gt.setTimeStamp(m_record_gt.getTimeStamp() + skipped);
+  }
+
   return(true);
 }
 

@@ -49,6 +49,7 @@ USM_MOOSApp::USM_MOOSApp()
   m_report_interval = 5;
   m_pitch_tolerance = 5;
   m_obstacle_hit = false;
+  m_stall_count_posted = 0;
   m_max_speed = 5;
   m_enabled = true;
   m_post_navpos_summary = false;
@@ -240,6 +241,16 @@ bool USM_MOOSApp::Iterate()
   // Part II: Vehicle Simulator Function
   //====================================================
   m_model.propagate(m_curr_time);
+
+  // Surface the stall guard's activity. A run that spans a host stall
+  // covers less ground than its duration implies, and that has to be
+  // visible to whoever reads the log rather than averaged in silently.
+  if(m_model.getStallCount() != m_stall_count_posted) {
+    m_stall_count_posted = m_model.getStallCount();
+    Notify("USM_STALL_COUNT", (double)(m_stall_count_posted));
+    Notify("USM_STALL_SKIPPED", m_model.getStallSkipped());
+  }
+
   NodeRecord record = m_model.getNodeRecord();
 
   handleBuoyancyAndTrim(record);
@@ -351,6 +362,8 @@ bool USM_MOOSApp::OnStartUp()
       handled = m_model.setParam("max_acceleration", dval);
     else if((param == "max_deceleration") && isNumber(value))
       handled = m_model.setParam("max_deceleration", dval);
+    else if((param == "max_time_step") && isNumber(value))
+      handled = m_model.setParam("max_time_step", dval);
     else if((param == "max_depth_rate") && isNumber(value))
       handled = m_model.setParam("max_depth_rate", dval);
     else if((param == "max_depth_rate_speed") && isNumber(value))
@@ -859,6 +872,18 @@ bool USM_MOOSApp::buildReport()
   m_msgs << "TurnRate: " + trate_str << endl;
   m_msgs << "Datum: " + datum_lat + "," + datum_lon << endl;
   m_msgs << "Sailing:" << endl;
+  // Stall guard status. Reported unconditionally: a zero here is the
+  // meaningful reassurance that no jump was suppressed.
+  if(m_model.getMaxTimeStep() > 0) {
+    m_msgs << "  StallGuard: max_time_step="
+	   << doubleToStringX(m_model.getMaxTimeStep(),2) << "s"
+	   << "  clamped=" << m_model.getStallCount()
+	   << "  sim-time dropped="
+	   << doubleToStringX(m_model.getStallSkipped(),1) << "s" << endl;
+  }
+  else
+    m_msgs << "  StallGuard: off (max_time_step=0)" << endl;
+
   m_msgs << "  WindModel: " << wmod_str << endl;
   m_msgs << "  PolarPlot: " << polar_str << endl;
   m_msgs << "  Enabled:   " << sailing_str << endl;

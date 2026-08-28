@@ -78,6 +78,9 @@ protected: // Utility function(s)
   double  m_pitch_tolerance;
   double  m_max_speed;
   bool    m_obstacle_hit;
+
+  // Last stall count published, so USM_STALL_* posts only on change.
+  unsigned int m_stall_count_posted;
   
   WormHoleSet  m_wormset;
 

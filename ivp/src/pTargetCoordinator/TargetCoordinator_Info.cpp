@@ -131,6 +131,13 @@ void showExampleConfigAndExit()
   blk("  region_exit_buffer = 15     // metres outside the region      ");
   blk("                              //   (live: EVICT_BUFFER)         ");
   blk("  reengage_delay     = 10     // deaf period after a success    ");
+  blk("                                                                ");
+  blk("  // Charted land, from gen_land.py. Shuts escape bearings that ");
+  blk("  // run into the shore, and slides block/retreat stations off  ");
+  blk("  // the beach. Missing file => scores exits as open water.     ");
+  blk("  land_file          = land.txt                                 ");
+  blk("  land_aware         = true                                     ");
+  blk("  land_standoff      = 10     // water a hull needs, metres     ");
   blk("  alert_var          = TARGET_ALERT_AUTO                        ");
   blk("  survey_var         = SURVEY_AUTO                              ");
   blk("  draw_detect_rings  = true                                     ");

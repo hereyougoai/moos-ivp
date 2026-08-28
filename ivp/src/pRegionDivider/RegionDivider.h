@@ -37,6 +37,7 @@
 #include "XYPolygon.h"
 #include "XYSegList.h"
 #include "XYConvexGrid.h"
+#include "LandModel.h"
 
 class NodeRecord;
 
@@ -71,6 +72,14 @@ class RegionDivider : public AppCastingMOOSApp
   void  postCoverageGrid();
   void  postCoverageUpdates();
   void  postRegionPoly();
+
+ protected: // Land
+  bool  loadLand(std::string filename);
+  void  assessRegionLand();
+  // Longest stretch of open water along a lane, in sweep-frame u. Returns
+  // false if the lane is entirely ashore.
+  bool  waterRun(double sweep_ang, double v, double u_a, double u_b,
+                 double& w_a, double& w_b) const;
 
  protected: // Planning
   double    laneWidth() const;
@@ -114,6 +123,10 @@ class RegionDivider : public AppCastingMOOSApp
   std::string              m_grid_label;
   unsigned int             m_repeat_count;   // laps of the posted path
 
+  std::string              m_land_file;
+  bool                     m_land_trim;      // clip lanes to open water
+  double                   m_land_standoff;  // metres held off the shoreline
+
  protected: // State variables
   XYPolygon    m_region;
   bool         m_region_set;
@@ -138,6 +151,24 @@ class RegionDivider : public AppCastingMOOSApp
   bool         m_grid_ready;
   std::map<unsigned int, double> m_grid_deltas;
   unsigned int m_cells_swept;
+  unsigned int m_cells_land;
+
+  LandModel    m_land;
+  bool         m_land_ok;
+  std::string  m_land_errmsg;
+
+  // What the operator most wants to know about the region they just drew.
+  double       m_region_land_pct;
+  unsigned int m_region_verts_on_land;
+
+  // Planning residue: lane length given up to the shoreline, and legs that
+  // still cross land after trimming (turn-arounds around a headland, mostly).
+  // Mutable because it is accumulated inside laneExtent(), which is const and
+  // is called from every const pattern builder; the alternative is threading
+  // an out-parameter through all seven of them to carry a diagnostic.
+  mutable double m_lane_len_dropped;
+  unsigned int m_plan_land_crossings;
+  unsigned int m_plan_pts_dropped;
 };
 
 #endif

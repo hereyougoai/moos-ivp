@@ -101,6 +101,12 @@ public:
   std::string m_side_lock;
 
   bool m_allstop_on_breach;
+
+  // Whether "every course and speed scores zero" should halt the helm, or
+  // merely warn. Separate from m_allstop_on_breach because the two describe
+  // different situations: breached means already inside the obstacle,
+  // unavoidable means still outside but out of room to turn.
+  bool m_allstop_on_unavoidable;
   
 protected:
   HintHolder m_hints;

@@ -114,6 +114,17 @@ void showExampleConfigAndExit()
   blk("  buoyancy_rate        = 0.025    // meters/sec                 ");
   blk("  max_acceleration     = 0        // meters/sec^2               ");
   blk("  max_deceleration     = 0.5      // meters/sec^2               ");
+  blk("                                                                ");
+  blk("  // Largest sim interval one integration step may cover, in     ");
+  blk("  // seconds. 0 (default) disables the guard.                    ");
+  blk("  // Propagation is a single step over the elapsed interval, so  ");
+  blk("  // if the host stalls, every process stops -- the helm too --  ");
+  blk("  // and on resume the vehicle is carried the whole distance in  ");
+  blk("  // one jump, through any obstacle, with no helm iteration in   ");
+  blk("  // between to avoid it. Past this limit the world simply does  ");
+  blk("  // not advance; the skipped interval is dropped, not deferred, ");
+  blk("  // and is reported via USM_STALL_COUNT / USM_STALL_SKIPPED.    ");
+  blk("  max_time_step  = 0                                            ");
   blk("  max_depth_rate       = 0.5      // meters/sec                 ");
   blk("  max_depth_rate_speed = 2.0      // meters/sec                 ");
   blk("                                                                ");

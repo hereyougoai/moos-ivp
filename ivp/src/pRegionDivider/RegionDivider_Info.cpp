@@ -108,6 +108,12 @@ void showExampleConfigAndExit()
   blk("  coverage_shading = true     // shade swept cells on the chart ");
   blk("  cell_size        = 10                                         ");
   blk("                                                                ");
+  blk("  // Charted land, from gen_land.py. Missing file => open water.");
+  blk("  land_file     = land.txt                                      ");
+  blk("  land_trim     = true        // clip lanes to open water        ");
+  blk("  land_standoff = 8           // metres held off the shoreline   ");
+
+  blk("                                                                ");
   blk("  // Used only if DEPLOY_ALL fires before any MISSION_POLY      ");
   blk("  // has ever been received from the operator.                 ");
   blk("  default_region = pts={-70,-10:210,-10:210,-130:-70,-130}      ");

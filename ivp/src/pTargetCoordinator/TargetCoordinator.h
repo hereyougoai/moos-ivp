@@ -29,6 +29,7 @@
 #include "MOOS/libMOOSGeodesy/MOOSGeodesy.h"
 #include "NodeRecord.h"
 #include "XYPolygon.h"
+#include "LandModel.h"
 
 class TargetCoordinator : public AppCastingMOOSApp
 {
@@ -55,6 +56,8 @@ class TargetCoordinator : public AppCastingMOOSApp
   void clearPincerVisuals();
 
   void   assignAndPostBlock();
+  void   pullStationToWater(double tx, double ty,
+                            double& bx, double& by) const;
   bool   blockPoints(double lead1,
 		     double& b1x, double& b1y,
 		     double& b2x, double& b2y) const;
@@ -145,6 +148,12 @@ class TargetCoordinator : public AppCastingMOOSApp
   double                   m_bow_guard_deg;     // 0 disables
   double                   m_min_standoff;      // floor under trail_range
   double                   m_heading_bias;   // cost metres per degree off head
+
+  // Charted land. Same shoreline the helm avoids, so the exits scored here
+  // and the water the vehicles can actually use are the same thing.
+  std::string              m_land_file;
+  double                   m_land_standoff;  // metres of water a hull needs
+  bool                     m_land_aware;
   double                   m_exit_margin;    // cost a new exit must beat by
   double                   m_exit_commit;    // secs a challenger must hold
   bool                     m_swap_lock;      // freeze the pairing when engaged
@@ -215,6 +224,12 @@ class TargetCoordinator : public AppCastingMOOSApp
   bool         m_range_known;
   XYPolygon    m_region;
   bool         m_region_known;
+
+  LandModel    m_land;
+  bool         m_land_ok;
+  std::string  m_land_errmsg;
+  mutable unsigned int m_exits_blocked_by_land;  // of 36, last scored sweep
+  mutable unsigned int m_stations_pulled;        // stations moved off the beach
   bool         m_rings_drawn;
   double       m_last_ring_utc;
 
