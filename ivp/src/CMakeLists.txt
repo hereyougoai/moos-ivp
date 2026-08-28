@@ -156,6 +156,7 @@ SET(IVP_NON_GUI_LIBS
   lib_ufield         lib_logutils        lib_mbutil
   lib_manifest       lib_marine_pid      lib_turngeo
   lib_geodaid        lib_survey          lib_dep_behaviors
+  lib_landmodel
 )
 SET(IVP_GUI_LIBS
   lib_ipfview        lib_marineview
@@ -192,6 +193,7 @@ SET(IVP_NON_GUI_APPS
   uFldDelve          app_bweb            app_mhash_gen
   app_projfield      pMapMarkers         pSpoofNode
   pRegionDivider     pTargetCoordinator  pTargetPathPlanner
+  pLandGuard
 )
 SET(IVP_GUI_APPS
   app_ffview         app_geoview         app_alogview
